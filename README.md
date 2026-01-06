@@ -1,5 +1,5 @@
-[![Create a downloadable preview build](https://github.com/Anuril/Proxmox/actions/workflows/preview.yml/badge.svg)](https://github.com/Anuril/Proxmox/actions/workflows/preview.yml)
-[![Build and Test](https://github.com/Anuril/Proxmox/actions/workflows/php-ci.yml/badge.svg)](https://github.com/Anuril/Proxmox/actions/workflows/php-ci.yml)
+> **Warning**:
+This repository has been archived and is no longer maintained. For information up-to-date about FOSSBilling check the [FOSSBilling/FOSSBilling](https://github.com/FOSSBilling/FOSSBilling) repository.
 
 # Proxmox module for FOSSBilling
 
