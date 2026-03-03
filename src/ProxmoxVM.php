@@ -133,7 +133,7 @@ trait ProxmoxVM
 		$clientuser = $this->di['db']->findOne('service_proxmox_users', 'server_id = ? and client_id = ?', array($server->id, $client->id));
 
 		$proxmox = $this->getProxmoxInstance($server);
-		if ($proxmox->get_version()) {
+		if ($proxmox->getVersion()) {
 			$status = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/current");
 			// VM monitoring?
 

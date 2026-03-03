@@ -81,7 +81,7 @@ trait ProxmoxServer
 		// check if tokenname and tokenvalue contain values by checking their content
 		if (empty($server->tokenname) || empty($server->tokenvalue)) {
 			throw new \Box_Exception("Token Access Failed: No tokenname or tokenvalue provided");
-		} else if ($proxmox->get_version()) {
+		} else if ($proxmox->getVersion()) {
 			error_log("Serviceproxmox: Login with token successful!");
 			$permissions = $proxmox->get("/access/permissions");
 			$found_permission = 0;
