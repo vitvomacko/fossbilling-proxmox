@@ -5,7 +5,9 @@
     "require": {
       "php": "^8.0|8.1|^8.2",
       "pve2-api-client/pve2-api-client": "^1.0.2",
-        "symfony/finder": "^5.3"
+      "symfony/finder": "^5.3|^6.0|^7.0",
+      "symfony/filesystem": "^5.3|^6.0|^7.0",
+      "symfony/http-client": "^5.3|^6.0|^7.0"
     },
     "funding": [
       {
