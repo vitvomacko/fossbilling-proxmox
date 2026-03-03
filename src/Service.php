@@ -568,111 +568,130 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		$proxmox = new \PVE2APIClient\PVE2_API($serveraccess, $server->root_user, $server->realm, $server->root_password, port: $server->port, tokenid: $clientuser->admin_tokenname, tokensecret: $clientuser->admin_tokenvalue, debug: $config['pmx_debug_logging']);
 
 		// Create Proxmox VM
-		if ($proxmox->login()) {
-			// compile VMID by combining the server id, the client id, and the order id separated by padded zeroes for thee numbers per variable
-			$vmid = $server->id . str_pad($client->id, 3, '0', STR_PAD_LEFT) . str_pad($order->id, 3, '0', STR_PAD_LEFT);
-
-			// check if vmid is already in use
-			$vmid_in_use = $proxmox->get("/nodes/" . $server->node . "/qemu/" . $vmid);
-			if ($vmid_in_use) {
-				$vmid = $vmid . '1';
-			}
-
-			$proxmoxuser_password = $this->di['tools']->generatePassword(16, 4); // Generate password
-
-			// Create VM
-			$clone = '';
-			$container_settings = array();
-			$description = 'Service package ' . $model->id . ' belonging to client id: ' . $client->id;
-
-			if ($product_config['clone'] == true) {
-				$clone = '/' . $product_config['cloneid'] . '/clone';
-				$container_settings = array(
-					'newid' => $vmid,
-					'name' => $model->username,
-					'description' => $description,
-					'full' => true
-				);
-			} else { // TODO: Implement Container templates 
-				if ($product_config['virt'] == 'qemu') {
-					$container_settings = array(
-						'vmid' => $vmid,
-						'name' => 'vm' . $vmid,              
-						'node' => $server->name, 
-						'description' => $description,
-						'storage' => $product_config['storage'],
-						'memory' => $product_config['memory'],
-						'scsihw' => 'virtio-scsi-single',
-						'scsi0' => "Storage01:10",
-						'ostype' => "other",
-						'kvm' => "0",
-						'ide2' => $product_config['cdrom'] . ',media=cdrom',
-						'sockets' => $product_config['cpu'],
-						'cores' => $product_config['cpu'],
-						'numa' => "0",
-						'pool' => 'fb_client_' . $client->id,
-					);
-				} else {
-					$container_settings = array(
-						'vmid' => $vmid,
-						'hostname' => 'vm' . $vmid,
-						'description' => $description,
-						'storage' => $product_config['storage'],
-						'memory' => $product_config['memory'],
-						'ostemplate' => $product_config['ostemplate'],
-						'password' => $proxmoxuser_password,
-						'net0' => $product_config['network']
-					);
-					// TODO: Storage for LXC
-				}
-			}
-
-			// If the VM is properly created
-			$vmurl = "/nodes/" . $server->name . "/" . $product_config['virt'] . $clone;
-
-			$vmcreate = $proxmox->post($vmurl, $container_settings);
-			if ($vmcreate) {
-
-				// Start the vm
-				sleep(20);
-				$proxmox->post("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid . "/status/start", array());
-				$status = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid . "/status/current");
-
-				if (!empty($status)) {
-					sleep(10);
-					// Wait until it has been started
-					while ($status['status'] != 'running') {
-						$proxmox->post("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid . "/status/start", array());
-						sleep(10);
-						$status = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid . "/status/current");
-						// TODO: Check Startup
-					}
-				} else {
-					throw new \Box_Exception("VMID cannot be found");
-				}
-			} else {
-				throw new \Box_Exception("VPS has not been created");
-			}
-		} else {
+		if (!$proxmox->login()) {
 			throw new \Box_Exception('Login to Proxmox Host failed with client credentials', null, 7457);
 		}
 
-		// Retrieve VM IP
+		// Generate VMID: server_id + client_id (3 digits) + order_id (3 digits)
+		// Result fits in Proxmox range 100-999999999 for typical deployments.
+		$vmid = (int) ($server->id . str_pad($client->id, 3, '0', STR_PAD_LEFT) . str_pad($order->id, 3, '0', STR_PAD_LEFT));
+		if ($vmid < 100) {
+			$vmid = 100 + $vmid;
+		}
 
-		$model->server_id 		= $model->server_id;
-		$model->updated_at    	= date('Y-m-d H:i:s');
-		$model->vmid			= $vmid;
-		$model->password		= $proxmoxuser_password;
-		//$model->ipv4			= $ipv4;      	// TODO: Retrieve IP address of the VM from the PMX IPAM module
-		//$model->ipv6			= $ipv6;		// TODO: Retrieve IP address of the VM from the PMX IPAM module
-		//$model->hostname		= $hostname;	// TODO: Retrieve hostname from the Order form
+		// Ensure VMID is not already in use on this node
+		$vmid_in_use = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid);
+		if ($vmid_in_use) {
+			// Append a suffix and retry once; if still colliding, raise an error
+			$vmid = $vmid + 1;
+			if ($proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid)) {
+				throw new \Box_Exception("Could not find a free VMID for this order. Please contact support.");
+			}
+		}
+
+		$proxmoxuser_password = $this->di['tools']->generatePassword(16, 4); // Generate root/console password
+		$vm_name              = 'vm-' . $vmid;
+
+		// Build VM/CT creation parameters
+		$clone              = '';
+		$container_settings = [];
+		$description        = 'Service #' . $model->id . ' – client #' . $client->id;
+
+		if (!empty($product_config['clone'])) {
+			// Clone an existing template VM
+			$clone              = '/' . $product_config['cloneid'] . '/clone';
+			$container_settings = [
+				'newid'       => $vmid,
+				'name'        => $vm_name,
+				'description' => $description,
+				'full'        => true,
+				'pool'        => 'fb_client_' . $client->id,
+			];
+		} elseif ($product_config['virt'] === 'qemu') {
+			// Create a fresh QEMU VM from ISO/CD-ROM
+			$container_settings = [
+				'vmid'        => $vmid,
+				'name'        => $vm_name,
+				'description' => $description,
+				'storage'     => $product_config['storage'],
+				'memory'      => $product_config['memory'],
+				'scsihw'      => 'virtio-scsi-single',
+				'scsi0'       => $product_config['storage'] . ':' . ($product_config['disk'] ?? 10),
+				'ostype'      => $product_config['ostype'] ?? 'other',
+				'bios'        => $product_config['bios'] ?? 'seabios',
+				'ide2'        => ($product_config['cdrom'] ?? '') . ',media=cdrom',
+				'sockets'     => 1,
+				'cores'       => $product_config['cpu'],
+				'onboot'      => 1,
+				'pool'        => 'fb_client_' . $client->id,
+			];
+		} else {
+			// Create a fresh LXC container
+			$container_settings = [
+				'vmid'       => $vmid,
+				'hostname'   => $vm_name,
+				'description' => $description,
+				'storage'    => $product_config['storage'],
+				'memory'     => $product_config['memory'],
+				'swap'       => $product_config['swap'] ?? 512,
+				'ostemplate' => $product_config['ostemplate'],
+				'password'   => $proxmoxuser_password,
+				'net0'       => $product_config['network'] ?? 'name=eth0,bridge=vmbr0,dhcp',
+				'rootfs'     => $product_config['storage'] . ':' . ($product_config['disk'] ?? 8),
+				'onboot'     => 1,
+				'pool'       => 'fb_client_' . $client->id,
+			];
+		}
+
+		// Create the VM/CT
+		$vmurl    = "/nodes/" . $server->name . "/" . $product_config['virt'] . $clone;
+		$vmcreate = $proxmox->post($vmurl, $container_settings);
+		if (!$vmcreate) {
+			throw new \Box_Exception("VPS could not be created on the Proxmox node.");
+		}
+
+		// Wait for the creation task to settle before starting
+		sleep(10);
+
+		// Start the VM/CT
+		$proxmox->post("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid . "/status/start", []);
+
+		// Poll until running, with a maximum wait of 120 seconds (12 × 10 s)
+		$max_retries = 12;
+		for ($i = 0; $i < $max_retries; $i++) {
+			sleep(10);
+			$status = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid . "/status/current");
+			if (empty($status)) {
+				throw new \Box_Exception("VMID $vmid not found after creation.");
+			}
+			if ($status['status'] === 'running') {
+				break;
+			}
+			// Re-send start in case the first one was lost
+			$proxmox->post("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid . "/status/start", []);
+			if ($i === $max_retries - 1) {
+				throw new \Box_Exception("VM $vmid did not reach 'running' state within 120 seconds.");
+			}
+		}
+
+		// Allocate an IP from the IPAM pool if one is available
+		$ipam   = $this->allocate_ip();
+		$ipv4   = $ipam['ip'] ?? null;
+		$gateway = $ipam['gateway'] ?? null;
+
+		// Persist the new service record
+		$model->updated_at = date('Y-m-d H:i:s');
+		$model->vmid       = $vmid;
+		$model->password   = $proxmoxuser_password;
+		$model->ipv4       = $ipv4;
+		$model->hostname   = $vm_name;
 		$this->di['db']->store($model);
 
-		return array(
-			'ip'	=> 	'to be sent by us shortly',		// $model->ipv4 - Return IP address of the VM
-			'username'  =>  'root',
-			'password'  =>  'See Admin Area', // Password won't be sen't by E-Mail. It will be stored in the database and can be retrieved from the client area
-		);
+		return [
+			'ip'       => $ipv4 ?? 'To be assigned – check the client area',
+			'username' => 'root',
+			'password' => $proxmoxuser_password,
+		];
 	}
 
 	/**
