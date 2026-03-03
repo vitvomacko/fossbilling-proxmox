@@ -18,7 +18,11 @@
 
 namespace Box\Mod\Serviceproxmox;
 
-require __DIR__ . '/vendor/autoload.php';
+// Load Composer autoloader when running standalone (outside FOSSBilling's class loader).
+// In a deployed FOSSBilling instance composer install must be run in this directory first.
+if (file_exists(__DIR__ . '/vendor/autoload.php')) {
+	require_once __DIR__ . '/vendor/autoload.php';
+}
 
 use Symfony\Component\Filesystem\Exception\IOException;
 use Symfony\Component\Filesystem\Filesystem;
