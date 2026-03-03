@@ -52,6 +52,39 @@ trait ProxmoxIPAM
 	}
 
 	/**
+	 * Allocates the next free IPv4 address from the IPAM pool.
+	 *
+	 * Looks up all registered IPs in service_proxmox_ipadress, excludes
+	 * gateway entries and IPs already assigned to active services, and
+	 * returns the first available address together with its gateway.
+	 *
+	 * @return array|null Array with keys 'ip' and 'gateway', or null if no IP is available.
+	 */
+	public function allocate_ip(): ?array
+	{
+		// All IPs already assigned to active services
+		$assigned = $this->di['db']->getCol('SELECT ipv4 FROM service_proxmox WHERE ipv4 IS NOT NULL AND ipv4 != ""');
+
+		// Candidate IPs: not a gateway, not already assigned
+		$candidates = $this->di['db']->find('service_proxmox_ipadress', 'gateway = 0 AND dedicated = 0');
+
+		foreach ($candidates as $candidate) {
+			if (!in_array($candidate->ip, $assigned, true)) {
+				// Fetch gateway for this range
+				$range   = $this->di['db']->load('service_proxmox_ip_range', $candidate->ip_range_id);
+				$gateway = $range ? $range->gateway : null;
+
+				return [
+					'ip'      => $candidate->ip,
+					'gateway' => $gateway,
+				];
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * Retrieves a list of VLANs from the Proxmox IPAM service.
 	 *
 	 * @return array An array of VLAN objects, each containing the VLAN ID and name.
