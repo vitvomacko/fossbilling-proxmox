@@ -92,29 +92,41 @@ trait ProxmoxVM
 			$server = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $model->server_id));
 
 			$proxmox = $this->getProxmoxInstance($server);
-			if ($proxmox->login()) {
-				$proxmox->post("/nodes/" . $model->node . "/" . $product_config['virt'] . "/" . $model->vmid . "/status/shutdown", array());
-				$status = $proxmox->get("/nodes/" . $model->node . "/" . $product_config['virt'] . "/" . $model->vmid . "/status/current");
-
-				// Wait until the server has been shut down if the server exists
-				if (!empty($status)) {
-					while ($status['status'] != 'stopped') {
-						sleep(10);
-						$proxmox->post("/nodes/" . $model->node . "/" . $product_config['virt'] . "/" . $model->vmid . "/status/shutdown", array());
-						$status = $proxmox->get("/nodes/" . $model->node . "/" . $product_config['virt'] . "/" . $model->vmid . "/status/current");
-					}
-				} else {
-					throw new \Box_Exception("VMID cannot be found");
-				}
-				if ($proxmox->delete("/nodes/" . $model->node . "/" . $product_config['virt'] . "/" . $model->vmid)) {
-					// TODO: Check if that was the last VM for the client and delete the client user on Proxmox
-					return true;
-				} else {
-					throw new \Box_Exception("VM not deleted");
-				}
-			} else {
+			if (!$proxmox->login()) {
 				throw new \Box_Exception("Login to Proxmox Host failed");
 			}
+
+			$node     = $server->name;
+			$virt     = $product_config['virt'];
+			$vmid     = $model->vmid;
+			$base_url = "/nodes/$node/$virt/$vmid";
+
+			$status = $proxmox->get("$base_url/status/current");
+			if (empty($status)) {
+				throw new \Box_Exception("VMID $vmid cannot be found on node $node");
+			}
+
+			if ($status['status'] !== 'stopped') {
+				$proxmox->post("$base_url/status/shutdown", ['forceStop' => true]);
+
+				// Wait up to 120 s for the VM to stop
+				$max_retries = 12;
+				for ($i = 0; $i < $max_retries; $i++) {
+					sleep(10);
+					$status = $proxmox->get("$base_url/status/current");
+					if ($status['status'] === 'stopped') {
+						break;
+					}
+					if ($i === $max_retries - 1) {
+						throw new \Box_Exception("VM $vmid did not stop within 120 seconds. Cannot delete.");
+					}
+				}
+			}
+
+			if (!$proxmox->delete($base_url)) {
+				throw new \Box_Exception("VM $vmid could not be deleted from Proxmox.");
+			}
+			return true;
 		}
 		return false;
 	}
@@ -159,35 +171,35 @@ trait ProxmoxVM
 		$clientuser = $this->di['db']->findOne('service_proxmox_users', 'server_id = ? and client_id = ?', array($server->id, $client->id));
 
 		$proxmox = $this->getProxmoxInstance($server);
-		if ($proxmox->login()) {
-			$proxmox->post("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/shutdown", array());
-			$status = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/current");
-
-			// Wait until the VM has been shut down if the VM exists
-			if (!empty($status)) {
-				while ($status['status'] != 'stopped') {
-					sleep(10);
-					$proxmox->post("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/shutdown", array());
-					$status = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/current");
-				}
-			}
-			// Restart
-			if ($proxmox->post("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/start", array())) {
-				sleep(10);
-				$status = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/current");
-				while ($status['status'] != 'running') {
-					$proxmox->post("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/start", array());
-					sleep(10);
-					$status = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/current");
-					// Starting twice => error...
-				}
-				return true;
-			} else {
-				throw new \Box_Exception("Reboot failed");
-			}
-		} else {
+		if (!$proxmox->login()) {
 			throw new \Box_Exception("Login to Proxmox Host failed.");
 		}
+
+		$base_url = "/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid;
+
+		// Graceful shutdown with force, max 120 s
+		$proxmox->post("$base_url/status/shutdown", ['forceStop' => true]);
+		for ($i = 0; $i < 12; $i++) {
+			sleep(10);
+			$status = $proxmox->get("$base_url/status/current");
+			if (!empty($status) && $status['status'] === 'stopped') {
+				break;
+			}
+			if ($i === 11) {
+				throw new \Box_Exception("VM did not stop within 120 seconds. Reboot aborted.");
+			}
+		}
+
+		// Start
+		$proxmox->post("$base_url/status/start", []);
+		for ($i = 0; $i < 12; $i++) {
+			sleep(10);
+			$status = $proxmox->get("$base_url/status/current");
+			if (!empty($status) && $status['status'] === 'running') {
+				return true;
+			}
+		}
+		throw new \Box_Exception("VM did not reach 'running' state within 120 seconds after reboot.");
 	}
 
 	/*
