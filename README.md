@@ -1,9 +1,10 @@
-> **Warning**:
-This repository has been archived and is no longer maintained. For information up-to-date about FOSSBilling check the [FOSSBilling/FOSSBilling](https://github.com/FOSSBilling/FOSSBilling) repository.
+> **Note**:
+> This is an **actively maintained fork** of the archived [FOSSBilling/Proxmox](https://github.com/FOSSBilling/Proxmox) module.
+> The original upstream was archived in January 2026. This fork fixes critical bugs and continues development.
 
 # Proxmox module for FOSSBilling
 
-# This module is still in development and not ready for production use.
+> **Warning**: This module is still in active development. Test thoroughly before deploying to production.
 
 WIP Proxmox support for FOSSBilling. As stated above, this is still heavily a WIP and is not ready for production use. Please only install it if you are a developer and intend to contribute back to the module. Please see the issues (especially [#26](https://github.com/FOSSBilling/Proxmox/issues/26)) for the current status of the module as some great work is being done, but it's not yet to a complete state.
 
@@ -12,13 +13,13 @@ WIP Proxmox support for FOSSBilling. As stated above, this is still heavily a WI
 
 ## Features
 - Manage pools of Proxmox servers (orders can be allocated to servers automatically based on their capacity)
-- Complete Privilege Separation (each client can only see their own VMs),
-- Admin can't see inside client's VMs (Only the VM ID, Name, Status, IP, RAM, CPU, Disk, Bandwidth, etc.)
-- Provision LXC containers (Doensn't Work - WIP)
-- Provision QEMU KVM machines (Doensn't Work - WIP)
-- Clients can start, shutdown and reboot their VMs (online console not working right now)
-- Proxmox Servers do not have to be reachable from the Internet (Might need a nginx proxy manager for this, but not sure yet.)
-- Rudimentary Backup of Module Data (Module data is not lost anymore when reinstalling.)
+- Complete Privilege Separation – each client can only see their own VMs
+- Provision LXC containers (beta)
+- Provision QEMU KVM machines via clone or from ISO (beta)
+- IP address management (IPAM) – automatic IP allocation from configured ranges
+- Clients can start, shutdown and reboot their VMs
+- Fill or spread placement strategy configurable per product
+- Rudimentary backup of module data (module data is not lost when reinstalling)
 
 
 ## TODOs:
@@ -82,17 +83,30 @@ CALL DropTables();
 DROP PROCEDURE IF EXISTS DropTables;
 ```
 
-### Installation for 0.1.0 Preview
-- Go to the Modules folder (f.ex: ```cd /var/www/modules```)
-- Run ```git clone https://github.com/FOSSBilling/Proxmox.git Serviceproxmox```
-- Go Inside the directory ```cd Serviceproxmox/```
-- Checkout the 0.1.0 branch ```git checkout 0.1.0```
-- Make sure to chown to your web-servers User (f.ex `chown www-data:www-data Serviceproxmox -Rf`) 
-- Install the Module in the Web interface.
-- Configure the Proxmox module in the FOSSBilling admin area
-- Add new Proxmox servers.
-- "Prepare Server" on each Proxmox server (this will create the necessary API user and role) (The Plus Button in the Server List)
-- Add new Proxmox products with the correct VM settings setup
+### Installation
+
+```bash
+# Go to your FOSSBilling modules directory
+cd /var/www/fossbilling/modules
+
+# Clone this fork
+git clone https://github.com/vitvomacko/fossbilling-proxmox.git Serviceproxmox
+
+# Install PHP dependencies
+cd Serviceproxmox/src
+composer install --no-dev
+
+# Fix ownership (adjust user to match your web server)
+chown -R www-data:www-data /var/www/fossbilling/modules/Serviceproxmox
+```
+
+Then in the FOSSBilling admin area:
+
+1. Go to **Extensions → Overview** and install the **Proxmox** module.
+2. Go to **Proxmox → Servers** and add your Proxmox node(s).
+3. Click **Prepare Server** on each server (creates the API user, token and permissions).
+4. Configure IP ranges under **Proxmox → IPAM** so the module can auto-assign IPs.
+5. Create products under **Products** and select *Proxmox* as the service type.
 
 The Proxmox Addon now has its own Menu Entry:
 
@@ -131,6 +145,7 @@ The Proxmox Addon now has its own Menu Entry:
 This module is licensed under the GNU General Public License v3.0. See the LICENSE file for more information.
 
 ## Copyright
-Copyright: Christoph Schläpfer & the FOSSBilling Team.
+Original module: Christoph Schläpfer & the FOSSBilling Team.
+Fork maintainer: [vitvomacko](https://github.com/vitvomacko)
 
-Based on [previous work](https://github.com/scith/BoxBilling_Proxmox) by [Scith](https://github.com/scith).
+Based on [previous work](https://github.com/scith/BoxBilling_Proxmox) by [Scitch](https://github.com/scitch).
