@@ -142,38 +142,53 @@ trait ProxmoxServer
 		$avoid_overprovision = $config['avoid_overprovision'];
 
 
-		$servers = $this->di['db']->find('service_proxmox_server', ['status' => 'active']);
+		$servers = $this->di['db']->find('service_proxmox_server', 'active = 1');
 
 		$server = null;
-		$server_ratio = 0;
-		// use values from database to calculate ratio and store the server id, cpu and ram usage ratio if it's better than the previous one
+		// fill: pick most-loaded server that still has capacity (consolidate VMs)
+		// spread: pick least-loaded server (distribute VMs evenly)
+		$best_ratio = ($filling === 'spread') ? PHP_INT_MAX : -1;
+
 		foreach ($servers as $s) {
-			$cpu_usage = $s['cpu_cores_allocated'];
-			$ram_usage = $s['ram_allocated'];
-			$cpu_cores = $s['cpu_cores'];
-			$ram = $s['ram'];
+			$cpu_cores = (int) $s->cpu_cores;
+			$ram       = (int) $s->ram;
+
+			// skip servers with no capacity configured to avoid division by zero
+			if ($cpu_cores <= 0 || $ram <= 0) {
+				continue;
+			}
+
+			$cpu_usage = (float) $s->cpu_cores_allocated;
+			$ram_usage = (float) $s->ram_allocated;
 
 			$cpu_ratio = $cpu_usage / $cpu_cores;
 			$ram_ratio = $ram_usage / $ram;
 
-			// if avoid_overprovision is set to true, servers with a ratio of >1 are ignored
+			// if avoid_overprovision is set, skip servers already over 100%
 			if ($avoid_overprovision && ($cpu_ratio > 1 || $ram_ratio > 1)) {
 				continue;
 			}
-			// calculate ratio with overprovisioning
+
+			// apply overprovisioning multiplier
 			$cpu_ratio = $cpu_ratio * (1 + $cpu_overprovion_percent / 100);
 			$ram_ratio = $ram_ratio * (1 + $ram_overprovion_percent / 100);
-			// check current best ratio
-			if ($cpu_ratio + $ram_ratio > $server_ratio) {
-				$server_ratio = $cpu_ratio + $ram_ratio;
-				$server = $s['id'];
+			$combined  = $cpu_ratio + $ram_ratio;
+
+			if ($filling === 'spread') {
+				// pick server with lowest usage
+				if ($combined < $best_ratio) {
+					$best_ratio = $combined;
+					$server     = $s->id;
+				}
+			} else {
+				// fill: pick server with highest usage (still within limits)
+				if ($combined > $best_ratio) {
+					$best_ratio = $combined;
+					$server     = $s->id;
+				}
 			}
 		}
-		// if no server is found, return null
-		if ($server == null) {
-			return null;
-		}
-		// if a server is found, return the id
+
 		return $server;
 	}
 
