@@ -62,13 +62,18 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 	private function getPdo(): PDO
 	{
 		if (!$this->pdo) {
-			// Get db config
-			$db_user = $this->di['config']['db']['user'];
-			$db_password = $this->di['config']['db']['password'];
-			$db_name = $this->di['config']['db']['name'];
+			$db = \FOSSBilling\Config::getProperty('db');
+			$host     = $db['host']     ?? 'localhost';
+			$port     = $db['port']     ?? '3306';
+			$dbname   = $db['name']     ?? '';
+			$db_user  = $db['user']     ?? '';
+			$db_pass  = $db['password'] ?? '';
 
-			// Create PDO instance
-			$this->pdo = new PDO('mysql:host=localhost;dbname=' . $db_name, $db_user, $db_password);
+			$this->pdo = new PDO(
+				"mysql:host={$host};port={$port};dbname={$dbname}",
+				$db_user,
+				$db_pass
+			);
 			$this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 		}
 
@@ -182,11 +187,7 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 
 			try {
 				// Create a new PDO instance, connecting to your MySQL database
-				$pdo = new PDO(
-					'mysql:host=' . $this->di['config']['db']['host'] . ';dbname=' . $this->di['config']['db']['name'],
-					$this->di['config']['db']['user'],
-					$this->di['config']['db']['password']
-				);
+				$pdo = $this->getPdo();
 
 				// Loop through each migration file
 				foreach ($migrations as $migration) {
@@ -459,10 +460,6 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 			$dump = str_replace($version_line . "\n", '', $dump);
 
 			if ($dump_version == $version) {
-				$db_user = $this->di['config']['db']['user'];
-				$db_password = $this->di['config']['db']['password'];
-				$db_name = $this->di['config']['db']['name'];
-
 				try {
 					// create PDO instance
 					$pdo = $this->getPdo();
@@ -921,7 +918,7 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 	 */
 	private function _getSalt()
 	{
-		return $this->di['config']['salt'];
+		return \FOSSBilling\Config::getProperty('info.salt', '');
 	}
 
 	private function getProxmoxInstance($server)
