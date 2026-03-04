@@ -202,6 +202,7 @@ class Client extends \Api_Abstract
                 break;
             case 'shutdown':
                 $this->getService()->vm_shutdown($order, $service);
+                break;
             default:
                 return false;
         }
@@ -216,5 +217,72 @@ class Client extends \Api_Abstract
     {
         $appjs = $this->getService()->get_novnc_appjs($data);
         return $appjs;
+    }
+
+    /**
+     * Save or update the client's SSH public key.
+     *
+     * The key is stored in extension_meta and injected into new VMs at provisioning.
+     * Existing running VMs are NOT updated automatically.
+     *
+     * @param array $data ['ssh_key' => 'ssh-rsa AAAA...']
+     * @return bool
+     * @throws \Box_Exception
+     */
+    public function ssh_key_save($data)
+    {
+        if (empty($data['ssh_key'])) {
+            throw new \Box_Exception('SSH key is required');
+        }
+
+        $key = trim($data['ssh_key']);
+
+        // Basic format validation: must start with a known key type
+        $allowed_prefixes = ['ssh-rsa', 'ssh-ed25519', 'ssh-ecdsa', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384', 'ecdsa-sha2-nistp521', 'sk-ssh-ed25519', 'sk-ecdsa-sha2-nistp256'];
+        $valid = false;
+        foreach ($allowed_prefixes as $prefix) {
+            if (str_starts_with($key, $prefix . ' ')) {
+                $valid = true;
+                break;
+            }
+        }
+        if (!$valid) {
+            throw new \Box_Exception('Invalid SSH public key format. Key must start with ssh-rsa, ssh-ed25519, or ecdsa-sha2-*');
+        }
+
+        // Key must have at least two parts (type + base64 data)
+        $parts = explode(' ', $key);
+        if (count($parts) < 2 || strlen($parts[1]) < 20) {
+            throw new \Box_Exception('SSH key appears to be incomplete');
+        }
+
+        $client_id = $this->di['loggedin_client']->id;
+        $this->getService()->save_client_ssh_key($client_id, $key);
+
+        return true;
+    }
+
+    /**
+     * Get the client's currently stored SSH public key.
+     *
+     * @return array ['ssh_key' => '...'] or ['ssh_key' => null]
+     */
+    public function ssh_key_get($data)
+    {
+        $client_id = $this->di['loggedin_client']->id;
+        $key = $this->getService()->get_client_ssh_key($client_id);
+        return ['ssh_key' => $key];
+    }
+
+    /**
+     * Delete the client's stored SSH public key.
+     *
+     * @return bool
+     */
+    public function ssh_key_delete($data)
+    {
+        $client_id = $this->di['loggedin_client']->id;
+        $this->getService()->delete_client_ssh_key($client_id);
+        return true;
     }
 }

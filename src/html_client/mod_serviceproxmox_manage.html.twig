@@ -1,45 +1,105 @@
 {% block js %}
    {#  {{ '/serviceproxmox/novnc/app.js' | script_tag }} #}
-
     {{ '/serviceproxmox/novnc/app/styles/input.css' | stylesheet_tag }}
     {{ '/serviceproxmox/novnc/app/styles/pve.css' | stylesheet_tag }}
     {{ '/serviceproxmox/novnc/app/error-handler.js' | script_tag }}
 {% endblock %}
+
 {% if order.status == 'active' %}
-    {% set vm = client.serviceproxmox_vm_get({"order_id":order.id}) %}
-    {% set server = client.serviceproxmox_server_get({"order_id":order.id}) %}
-    <!-- get proxmox_service -->
-    {% set proxmox_service = client.serviceproxmox_get_proxmox_service({"order_id":order.id}) %}
-    <!-- get websocket infos from vm_cli -->
+    {% set vm = client.serviceproxmox_vm_get({"order_id": order.id}) %}
+    {% set proxmox_service = client.serviceproxmox_get_proxmox_service({"order_id": order.id}) %}
+    {% set ssh_key_data = client.serviceproxmox_ssh_key_get({}) %}
 
-    <p class="text-center">
-        Status: 
-                
-        {{ server.status }}
-
-        <div class="control-group controls-row text-center">
-            <a class="btn btn-success api-link" href="{{ 'api/client/serviceproxmox/vm_manage'|link({'order_id' : order.id, 'method' : 'start', 'CSRFToken': CSRFToken}) }}" data-api-confirm="{{ 'Are you sure?' | trans }}" data-api-msg="{{ 'VM starting. Reload page after a few moments.' | trans }}">
-                {{ 'Start VM' | trans }}
-            </a>
-            <a class="btn btn-danger api-link" href="{{ 'api/client/serviceproxmox/vm_manage'|link({'order_id' : order.id, 'method' : 'shutdown', 'CSRFToken': CSRFToken}) }}" data-api-confirm="{{ 'Are you sure?' | trans }}" data-api-msg="{{ 'VM shutting down. Reload page after a few moments.' | trans }}">
-                {{ 'Shutdown VM' | trans }}
-            </a>
-            <a class="btn btn-warning api-link" href="{{ 'api/client/serviceproxmox/vm_manage'|link({'order_id' : order.id, 'method' : 'reboot', 'CSRFToken': CSRFToken}) }}" data-api-confirm="{{ 'Are you sure?' | trans }}" data-api-msg="{{ 'VM rebooting. Reload page after a few moments.' | trans }}">
-                {{ 'Reboot VM' | trans }}
-            </a>
+    {# ── VM Info ───────────────────────────────────────────────────────────── #}
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <table class="table table-bordered">
+                <tr><th>{{ 'Status' | trans }}</th><td><span class="badge badge-{{ vm.status == 'running' ? 'success' : 'secondary' }}">{{ vm.status }}</span></td></tr>
+                <tr><th>{{ 'IP Address' | trans }}</th><td>{{ proxmox_service.ipv4 ?? '—' }}</td></tr>
+                <tr><th>{{ 'Hostname' | trans }}</th><td>{{ proxmox_service.hostname ?? '—' }}</td></tr>
+                <tr><th>{{ 'Username' | trans }}</th><td>root</td></tr>
+                <tr><th>{{ 'VMID' | trans }}</th><td>{{ proxmox_service.vmid ?? '—' }}</td></tr>
+            </table>
         </div>
+    </div>
 
-        <h2>
-            {{ 'Console' | trans }}
-        </h2>
-        1
-                
-        {% if server.status == "running" %}
-            <!-- TODO: implement vnc console -->
-                {% else %}
-                {{ 'The server needs to be running' | trans }}
-            {% endif %}
+    {# ── VM Controls ───────────────────────────────────────────────────────── #}
+    <div class="mb-4">
+        <a class="btn btn-success api-link me-1"
+           href="{{ 'api/client/serviceproxmox/vm_manage'|link({'order_id': order.id, 'method': 'start', 'CSRFToken': CSRFToken}) }}"
+           data-api-confirm="{{ 'Are you sure?' | trans }}"
+           data-api-msg="{{ 'VM starting. Reload the page in a few moments.' | trans }}">
+            {{ 'Start' | trans }}
+        </a>
+        <a class="btn btn-danger api-link me-1"
+           href="{{ 'api/client/serviceproxmox/vm_manage'|link({'order_id': order.id, 'method': 'shutdown', 'CSRFToken': CSRFToken}) }}"
+           data-api-confirm="{{ 'Are you sure?' | trans }}"
+           data-api-msg="{{ 'VM shutting down. Reload the page in a few moments.' | trans }}">
+            {{ 'Shutdown' | trans }}
+        </a>
+        <a class="btn btn-warning api-link"
+           href="{{ 'api/client/serviceproxmox/vm_manage'|link({'order_id': order.id, 'method': 'reboot', 'CSRFToken': CSRFToken}) }}"
+           data-api-confirm="{{ 'Are you sure?' | trans }}"
+           data-api-msg="{{ 'VM rebooting. Reload the page in a few moments.' | trans }}">
+            {{ 'Reboot' | trans }}
+        </a>
+    </div>
+
+    {# ── Console placeholder ───────────────────────────────────────────────── #}
+    <div class="mb-4">
+        <h4>{{ 'Console' | trans }}</h4>
+        {% if vm.status == 'running' %}
+            <p class="text-muted">{{ 'VNC console coming soon.' | trans }}</p>
+        {% else %}
+            <p class="text-muted">{{ 'The VM must be running to open a console.' | trans }}</p>
+        {% endif %}
+    </div>
+
+{% endif %}
+
+{# ── SSH Key Management (always visible, not order-specific) ──────────────── #}
+<div class="card mt-4">
+    <div class="card-header">
+        <h5 class="mb-0">{{ 'SSH Public Key' | trans }}</h5>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            {{ 'Your SSH key is injected into new VPS instances at provisioning time. Updating the key here does not affect already-running servers.' | trans }}
         </p>
 
-    {% endif %}
-    
+        {% if ssh_key_data.ssh_key %}
+            <div class="alert alert-success d-flex align-items-start gap-2">
+                <div class="flex-grow-1">
+                    <strong>{{ 'Key on file:' | trans }}</strong><br>
+                    <code class="small text-break">
+                        {# Show only the first 60 chars and the comment (last word) to avoid exposing the full key #}
+                        {{ ssh_key_data.ssh_key | slice(0, 60) }}…
+                        {% set parts = ssh_key_data.ssh_key | split(' ') %}
+                        {% if parts | length >= 3 %} {{ parts | last }}{% endif %}
+                    </code>
+                </div>
+                <a class="btn btn-sm btn-outline-danger api-link flex-shrink-0"
+                   href="{{ 'api/client/serviceproxmox/ssh_key_delete'|link({'CSRFToken': CSRFToken}) }}"
+                   data-api-confirm="{{ 'Remove your SSH key?' | trans }}"
+                   data-api-msg="{{ 'SSH key removed.' | trans }}">
+                    {{ 'Remove' | trans }}
+                </a>
+            </div>
+        {% endif %}
+
+        <form method="POST" action="{{ 'api/client/serviceproxmox/ssh_key_save' | link }}" class="api-form" data-api-msg="{{ 'SSH key saved.' | trans }}">
+            <input type="hidden" name="CSRFToken" value="{{ CSRFToken }}">
+            <div class="mb-3">
+                <label for="ssh_key" class="form-label">{{ (ssh_key_data.ssh_key ? 'Replace SSH key' : 'Add SSH key') | trans }}</label>
+                <textarea class="form-control font-monospace"
+                          id="ssh_key"
+                          name="ssh_key"
+                          rows="3"
+                          placeholder="ssh-ed25519 AAAA... user@host"
+                          required></textarea>
+                <div class="form-text">{{ 'Supported types: ssh-rsa, ssh-ed25519, ecdsa-sha2-*' | trans }}</div>
+            </div>
+            <button type="submit" class="btn btn-primary">{{ 'Save key' | trans }}</button>
+        </form>
+    </div>
+</div>

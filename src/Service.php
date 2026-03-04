@@ -878,4 +878,75 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		$config = $this->di['mod_config']('Serviceproxmox');
 		return new \PVE2APIClient\PVE2_API($serveraccess, $server->root_user, $server->realm, $server->root_password, port: $server->port, tokenid: $server->tokenname, tokensecret: $server->tokenvalue, debug: $config['pmx_debug_logging']);
 	}
+
+	/* ################################################################################################### */
+	/* #########################################  SSH Key  ############################################### */
+	/* ################################################################################################### */
+
+	/**
+	 * Save or update the client's SSH public key in extension_meta.
+	 *
+	 * @param int    $clientId
+	 * @param string $key       Trimmed, validated SSH public key
+	 */
+	public function save_client_ssh_key(int $clientId, string $key): void
+	{
+		$meta = $this->di['db']->findOne(
+			'extension_meta',
+			'ext = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
+			['mod_serviceproxmox', 'client', $clientId, 'ssh_key']
+		);
+
+		if (!$meta) {
+			$meta            = $this->di['db']->dispense('extension_meta');
+			$meta->ext       = 'mod_serviceproxmox';
+			$meta->rel_type  = 'client';
+			$meta->rel_id    = $clientId;
+			$meta->meta_key  = 'ssh_key';
+			$meta->created_at = date('Y-m-d H:i:s');
+		}
+
+		$meta->meta_value = $key;
+		$meta->updated_at = date('Y-m-d H:i:s');
+		$this->di['db']->store($meta);
+	}
+
+	/**
+	 * Get the client's stored SSH public key, or null if none is set.
+	 *
+	 * @param int $clientId
+	 * @return string|null
+	 */
+	public function get_client_ssh_key(int $clientId): ?string
+	{
+		$meta = $this->di['db']->findOne(
+			'extension_meta',
+			'ext = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
+			['mod_serviceproxmox', 'client', $clientId, 'ssh_key']
+		);
+
+		if ($meta && !empty(trim($meta->meta_value))) {
+			return trim($meta->meta_value);
+		}
+
+		return null;
+	}
+
+	/**
+	 * Delete the client's stored SSH public key.
+	 *
+	 * @param int $clientId
+	 */
+	public function delete_client_ssh_key(int $clientId): void
+	{
+		$meta = $this->di['db']->findOne(
+			'extension_meta',
+			'ext = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
+			['mod_serviceproxmox', 'client', $clientId, 'ssh_key']
+		);
+
+		if ($meta) {
+			$this->di['db']->trash($meta);
+		}
+	}
 }
