@@ -767,6 +767,58 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 	}
 
 	/**
+	 * Look up the service_proxmox record for a given order.
+	 *
+	 * @param  int $orderId
+	 * @return object
+	 * @throws \Box_Exception
+	 */
+	public function getServiceproxmoxByOrderId(int $orderId): object
+	{
+		$model = $this->di['db']->findOne('service_proxmox', 'order_id = ?', [$orderId]);
+		if (!$model) {
+			throw new \Box_Exception('Proxmox service not found for order #' . $orderId);
+		}
+		return $model;
+	}
+
+	/**
+	 * Dispatch a named method call on the service with the given model and data.
+	 * Used by Client API's __call() magic dispatcher for custom product methods.
+	 *
+	 * @param  object $model
+	 * @param  string $name
+	 * @param  array  $data
+	 * @return mixed
+	 * @throws \Box_Exception
+	 */
+	public function customCall(object $model, string $name, array $data): mixed
+	{
+		if (!method_exists($this, $name)) {
+			throw new \Box_Exception('Method ' . $name . ' not found in Proxmox service', null, 7104);
+		}
+		return $this->$name($model, $data);
+	}
+
+	/**
+	 * Return a ready-to-use SSH CLI string for connecting to the VM.
+	 *
+	 * @param  object $order
+	 * @param  object $service
+	 * @return string  e.g. "ssh root@10.0.1.5"
+	 */
+	public function vm_cli($order, $service): string
+	{
+		if (!empty($service->ipv4)) {
+			return 'ssh root@' . $service->ipv4;
+		}
+		if (!empty($service->hostname)) {
+			return 'ssh root@' . $service->hostname;
+		}
+		return '';
+	}
+
+	/**
 	 * Get the API array representation of a model
 	 * Important to interact with the Order
 	 * @param  object $model

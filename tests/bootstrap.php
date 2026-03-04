@@ -2,9 +2,22 @@
 
 require_once __DIR__ . '/../src/vendor/autoload.php';
 
-// Stub for \Box_Exception (not available outside FOSSBilling)
+// Stub for \Box_Exception (not available outside FOSSBilling).
+// FOSSBilling's real Box_Exception uses ($message, $previous = null, $code = 0),
+// i.e. the 2nd argument is the previous Throwable and the 3rd is the error code —
+// the inverse of PHP's built-in Exception constructor.
 if (!class_exists('\Box_Exception')) {
-    class Box_Exception extends \RuntimeException {}
+    class Box_Exception extends \RuntimeException
+    {
+        public function __construct(string $message = '', mixed $previous = null, int $code = 0)
+        {
+            parent::__construct(
+                $message,
+                $code,
+                ($previous instanceof \Throwable) ? $previous : null
+            );
+        }
+    }
 }
 
 // Stub for BBTestCase (FOSSBilling framework test base class)
