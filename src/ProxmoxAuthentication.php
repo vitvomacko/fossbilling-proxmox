@@ -86,73 +86,49 @@ trait ProxmoxAuthentication
 					break;
 			}
 
-			// Validate if there already is a user and token for fossbilling
-			$users = $proxmox->get("/access/users");
-			$found = 0;
-			// Iterate through the users and check for a user beginning with 'fb'
+			// Count existing FOSSBilling admin users (userid starts with 'fb_')
+			$users  = $proxmox->get("/access/users");
+			$found  = 0;
+			$userid = null;
 			foreach ($users as $user) {
-				if (strpos($user['userid'], 'fb') === 0) {
+				if (strpos($user['userid'], 'fb_') === 0) {
 					$found += 1;
 					$userid = $user['userid'];
 				}
-				// Handle the cases where there are no users, one user, or multiple users
-				switch ($found) {
-					case 0:
-						// Create a new user
-						$userid = 'fb_' . rand(1000, 9999) . '@pve'; // TODO: Make realm configurable in the module settings
-						// $groupid has to be defined because it is set in the switch statement above, otherwise it would throw an exception. $proxmox also, because otherwise, login would fail and break.
-						$proxmox->post("/access/users", array('userid' => $userid, 'password' => $this->di['tools']->generatePassword(16, 4), 'enable' => 1, 'comment' => 'fossbilling user', 'groups' => $groupid)); /* @phpstan-ignore-line */
-
-						// Create a token for the new user
-						$token = $proxmox->post("/access/users/" . $userid . "/token/fb_access", array()); /* @phpstan-ignore-line Proxmox is set, otherwise code errors out */
-
-						// Check if the token was created successfully
-						if ($token) {
-							$server->tokenname = $token['full-tokenid'];
-							$server->tokenvalue = $token['value'];
-						} else {
-							throw new \Box_Exception("Failed to create token for fossbilling user");
-							break;
-						}
-						break;
-					case 1:
-						// Create a token for the existing user
-						$token = $proxmox->post("/access/users/" . $userid . "/token/fb_access", array());/* @phpstan-ignore-line Proxmox is set, otherwise code errors out */
-						if ($token) {
-							$server->tokenname = $token['full-tokenid'];
-							$server->tokenvalue = $token['value'];
-						} else {
-							throw new \Box_Exception("Failed to create token for fossbilling user");
-							break;
-						}
-						break;
-					default:
-						throw new \Box_Exception("There are more than one fossbilling users on the server. Please delete all but one.");
-						break;
-				}
-				// Create permissions for the newly created token
-				// Set up permissions for the token (Admin user) to manage users, groups, and other administrative tasks
-				$permissions = $proxmox->put("/access/acl/", array('path' => '/', 'roles' => 'PVEUserAdmin', 'propagate' => 1, 'users' => $userid)); /* @phpstan-ignore-line */
-				$permissions = $proxmox->put("/access/acl/", array('path' => '/', 'roles' => 'PVEAuditor', 'propagate' => 1, 'users' => $userid)); /* @phpstan-ignore-line */
-				$permissions = $proxmox->put("/access/acl/", array('path' => '/', 'roles' => 'PVESysAdmin', 'propagate' => 1, 'users' => $userid)); /* @phpstan-ignore-line */
-				$permissions = $proxmox->put("/access/acl/", array('path' => '/', 'roles' => 'PVEPoolAdmin', 'propagate' => 1, 'users' => $userid)); /* @phpstan-ignore-line */
-				$permissions = $proxmox->put("/access/acl/", array('path' => '/', 'roles' => 'PVEDatastoreAdmin', 'propagate' => 1, 'users' => $userid)); /* @phpstan-ignore-line */
-				$permissions = $proxmox->put("/access/acl/", array('path' => '/', 'roles' => 'PVEUserAdmin', 'propagate' => 1, 'tokens' => $server->tokenname));
-				$permissions = $proxmox->put("/access/acl/", array('path' => '/', 'roles' => 'PVEAuditor', 'propagate' => 1, 'tokens' => $server->tokenname));
-				$permissions = $proxmox->put("/access/acl/", array('path' => '/', 'roles' => 'PVESysAdmin', 'propagate' => 1, 'tokens' => $server->tokenname));
-				$permissions = $proxmox->put("/access/acl/", array('path' => '/', 'roles' => 'PVEPoolAdmin', 'propagate' => 1, 'tokens' => $server->tokenname));
-				$permissions = $proxmox->put("/access/acl/", array('path' => '/', 'roles' => 'PVEDatastoreAdmin', 'propagate' => 1, 'tokens' => $server->tokenname));
-
-				// Sleep for 5 seconds
-				sleep(5);
-
-				// Delete the root password and unset the PVE2_API instance
-				$server->root_password = null;
-				unset($proxmox);
-
-				// Return the test_access result for the server
-				return $this->test_access($server);
 			}
+
+			// Handle the cases: no user, one user, or multiple users
+			if ($found > 1) {
+				throw new \Box_Exception("More than one FOSSBilling admin user found on the server. Please delete all but one.");
+			} elseif ($found === 0) {
+				// Create a new admin user and add to the fossbilling group
+				$userid = 'fb_' . rand(1000, 9999) . '@pve'; /* @phpstan-ignore-line */
+				$proxmox->post("/access/users", array('userid' => $userid, 'password' => $this->di['tools']->generatePassword(16, 4), 'enable' => 1, 'comment' => 'fossbilling user', 'groups' => $groupid)); /* @phpstan-ignore-line */
+			}
+			// $found === 1: re-use the existing user, $userid is already set
+
+			// Create an API token for the admin user
+			$token = $proxmox->post("/access/users/" . $userid . "/token/fb_access", array());
+			if (!$token) {
+				throw new \Box_Exception("Failed to create token for fossbilling user");
+			}
+			$server->tokenname  = $token['full-tokenid'];
+			$server->tokenvalue = $token['value'];
+
+			// Grant required roles to the user and the token
+			$admin_roles = ['PVEUserAdmin', 'PVEAuditor', 'PVESysAdmin', 'PVEPoolAdmin', 'PVEDatastoreAdmin'];
+			foreach ($admin_roles as $role) {
+				$proxmox->put("/access/acl/", array('path' => '/', 'roles' => $role, 'propagate' => 1, 'users' => $userid));
+				$proxmox->put("/access/acl/", array('path' => '/', 'roles' => $role, 'propagate' => 1, 'tokens' => $server->tokenname));
+			}
+
+			// Allow Proxmox to propagate the new ACLs
+			sleep(5);
+
+			$server->root_password = null;
+			unset($proxmox);
+
+			return $this->test_access($server);
 		} elseif (!empty($server->tokenname) && !empty($server->tokenvalue)) {
 			// Validate Permissions for the token
 			$permissions = $proxmox->get("/access/acl/");
@@ -228,29 +204,39 @@ trait ProxmoxAuthentication
 	 */
 	public function create_client_user($server, $client)
 	{
-		$clientuser = $this->di['db']->dispense('service_proxmox_users');
-		$clientuser->client_id = $client->id;
-		$this->di['db']->store($clientuser);
 		$proxmox = $this->getProxmoxInstance($server);
 		if (!$proxmox->login()) {
 			throw new \Box_Exception("Failed to connect to the server. create_client_user");
 		}
+
 		$userid = 'fb_customer_' . $client->id . '@pve'; // TODO: Make realm configurable in the module settings
-		$newuser = $proxmox->post("/access/users", array('userid' => $userid, 'password' => $this->di['tools']->generatePassword(16, 4), 'enable' => '1', 'comment' => 'fossbilling user ' . $client->id));
+		$proxmox->post("/access/users", array('userid' => $userid, 'password' => $this->di['tools']->generatePassword(16, 4), 'enable' => '1', 'comment' => 'fossbilling user ' . $client->id));
 		$newuser = $proxmox->get("/access/users/" . $userid);
+		if (!$newuser) {
+			throw new \Box_Exception("Failed to create Proxmox user for client " . $client->id);
+		}
 
-		// Create Token for Client
-		$clientuser->admin_tokenname = 'fb_admin_' . $client->id;
-		$clientuser->server_id = $server->id;
-		$admintoken_response = $proxmox->post("/access/users/" . $userid . "/token/" . $clientuser->admin_tokenname, array('comment' => 'fossbilling admin token for client id: ' . $client->id));
-		$clientuser->admin_tokenname = $admintoken_response['full-tokenid'];
+		// Create tokens
+		$admin_token_id = 'fb_admin_' . $client->id;
+		$admintoken_response = $proxmox->post("/access/users/" . $userid . "/token/" . $admin_token_id, array('comment' => 'fossbilling admin token for client id: ' . $client->id));
+		if (!$admintoken_response) {
+			throw new \Box_Exception("Failed to create admin token for client " . $client->id);
+		}
+
+		$view_token_id = 'fb_view_' . $client->id;
+		$viewtoken_response = $proxmox->post("/access/users/" . $userid . "/token/" . $view_token_id, array('comment' => 'fossbilling view token for client id: ' . $client->id));
+		if (!$viewtoken_response) {
+			throw new \Box_Exception("Failed to create view token for client " . $client->id);
+		}
+
+		// Persist only after all remote resources are created successfully
+		$clientuser = $this->di['db']->dispense('service_proxmox_users');
+		$clientuser->client_id        = $client->id;
+		$clientuser->server_id        = $server->id;
+		$clientuser->admin_tokenname  = $admintoken_response['full-tokenid'];
 		$clientuser->admin_tokenvalue = $admintoken_response['value'];
-		$clientuser->view_tokenname = 'fb_view_' . $client->id;
-		$viewtoken_response = $proxmox->post("/access/users/" . $userid . "/token/" . $clientuser->view_tokenname, array('comment' => 'fossbilling view token for client id: ' . $client->id));
-		$clientuser->view_tokenname = $viewtoken_response['full-tokenid'];
-		$clientuser->view_tokenvalue = $viewtoken_response['value'];
-
-
+		$clientuser->view_tokenname   = $viewtoken_response['full-tokenid'];
+		$clientuser->view_tokenvalue  = $viewtoken_response['value'];
 		$this->di['db']->store($clientuser);
 
 		// Check if the client already has a pool and if not create it.
