@@ -596,6 +596,17 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		$proxmoxuser_password = $this->di['tools']->generatePassword(16, 4); // Generate root/console password
 		$vm_name              = 'vm-' . $vmid;
 
+		// Retrieve SSH public key from client profile (stored via client area or admin)
+		$ssh_key = null;
+		$ssh_key_meta = $this->di['db']->findOne(
+			'extension_meta',
+			'ext = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
+			['mod_serviceproxmox', 'client', $client->id, 'ssh_key']
+		);
+		if ($ssh_key_meta && !empty(trim($ssh_key_meta->meta_value))) {
+			$ssh_key = trim($ssh_key_meta->meta_value);
+		}
+
 		// Build VM/CT creation parameters
 		$clone              = '';
 		$container_settings = [];
@@ -632,19 +643,23 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		} else {
 			// Create a fresh LXC container
 			$container_settings = [
-				'vmid'       => $vmid,
-				'hostname'   => $vm_name,
+				'vmid'        => $vmid,
+				'hostname'    => $vm_name,
 				'description' => $description,
-				'storage'    => $product_config['storage'],
-				'memory'     => $product_config['memory'],
-				'swap'       => $product_config['swap'] ?? 512,
-				'ostemplate' => $product_config['ostemplate'],
-				'password'   => $proxmoxuser_password,
-				'net0'       => $product_config['network'] ?? 'name=eth0,bridge=vmbr0,dhcp',
-				'rootfs'     => $product_config['storage'] . ':' . ($product_config['disk'] ?? 8),
-				'onboot'     => 1,
-				'pool'       => 'fb_client_' . $client->id,
+				'storage'     => $product_config['storage'],
+				'memory'      => $product_config['memory'],
+				'swap'        => $product_config['swap'] ?? 512,
+				'ostemplate'  => $product_config['ostemplate'],
+				'password'    => $proxmoxuser_password,
+				'net0'        => $product_config['network'] ?? 'name=eth0,bridge=vmbr0,dhcp',
+				'rootfs'      => $product_config['storage'] . ':' . ($product_config['disk'] ?? 8),
+				'onboot'      => 1,
+				'pool'        => 'fb_client_' . $client->id,
 			];
+			// Inject SSH key into LXC at creation time if available
+			if ($ssh_key) {
+				$container_settings['ssh-public-keys'] = $ssh_key;
+			}
 		}
 
 		// Create the VM/CT
@@ -652,6 +667,15 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		$vmcreate = $proxmox->post($vmurl, $container_settings);
 		if (!$vmcreate) {
 			throw new \Box_Exception("VPS could not be created on the Proxmox node.");
+		}
+
+		// For QEMU VMs (fresh or cloned): inject SSH key via cloud-init config after creation.
+		// Proxmox requires sshkeys to be URL-encoded (RFC 3986).
+		if ($ssh_key && $product_config['virt'] === 'qemu') {
+			$proxmox->put(
+				"/nodes/" . $server->name . "/qemu/" . $vmid . "/config",
+				['sshkeys' => rawurlencode($ssh_key)]
+			);
 		}
 
 		// Wait for the creation task to settle before starting
