@@ -1,6 +1,6 @@
 <?php
 
-require_once __DIR__ . '/../src/vendor/autoload.php';
+require_once __DIR__ . '/../vendor/autoload.php';
 
 // Stub for \Box_Exception (not available outside FOSSBilling).
 // FOSSBilling's real Box_Exception uses ($message, $previous = null, $code = 0),
@@ -45,8 +45,8 @@ class FakeDI implements ArrayAccess
 }
 
 // Load all module source traits/classes
-require_once __DIR__ . '/../src/ProxmoxIPAM.php';
-require_once __DIR__ . '/../src/ProxmoxServer.php';
-require_once __DIR__ . '/../src/ProxmoxAuthentication.php';
-require_once __DIR__ . '/../src/ProxmoxVM.php';
-require_once __DIR__ . '/../src/ProxmoxTemplates.php';
+require_once __DIR__ . '/../ProxmoxIPAM.php';
+require_once __DIR__ . '/../ProxmoxServer.php';
+require_once __DIR__ . '/../ProxmoxAuthentication.php';
+require_once __DIR__ . '/../ProxmoxVM.php';
+require_once __DIR__ . '/../ProxmoxTemplates.php';

@@ -32,7 +32,7 @@
       }
     ],
     "config": {
-        "vendor-dir": "./src/vendor",
+        "vendor-dir": "./vendor",
         "allow-plugins": {
             "phpstan/extension-installer": true
         }

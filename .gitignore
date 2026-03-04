@@ -53,3 +53,5 @@ src/vendor/
 .vscode
 *.phar
 *.lock
+vendor/
+.phpunit.result.cache
