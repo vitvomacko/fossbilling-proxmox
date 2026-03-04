@@ -706,16 +706,20 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 	 */
 	public function toApiArray($model)
 	{
-		// Retrieve associated server
 		$server = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $model->server_id));
 
 		return array(
-			'id'              => $model->id,
-			'client_id'       => $model->client_id,
-			'server_id'       => $model->server_id,
-			'username'        => $model->username,
-			'mailbox_quota'   => $model->mailbox_quota,
-			'server' 		  => $server,
+			'id'         => $model->id,
+			'client_id'  => $model->client_id,
+			'server_id'  => $model->server_id,
+			'vmid'       => $model->vmid,
+			'hostname'   => $model->hostname,
+			'ipv4'       => $model->ipv4,
+			'username'   => 'root',
+			'password'   => $model->password,
+			'server'     => $server,
+			'created_at' => $model->created_at,
+			'updated_at' => $model->updated_at,
 		);
 	}
 
@@ -727,11 +731,11 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 	 */
 	public function get_novnc_appjs($data)
 	{
-		// get list of servers
-
 		$servers = $this->di['db']->find('service_proxmox_server');
-		// select first server
-		$server = $servers['2'];
+		if (empty($servers)) {
+			throw new \Box_Exception('No Proxmox servers configured.');
+		}
+		$server = reset($servers); // use first active server
 
 		$hostname = $server->hostname;
 		// build url
