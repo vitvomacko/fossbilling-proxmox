@@ -607,13 +607,34 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 			$ssh_key = trim($ssh_key_meta->meta_value);
 		}
 
+		// Detect cloud-init mode: only applicable to QEMU (fresh or cloned)
+		$use_cloud_init = !empty($product_config['cloud_init']) && $product_config['virt'] === 'qemu';
+
+		// For cloud-init VMs, allocate IP before creation so ipconfig0 can be set before first boot.
+		// For non-cloud-init VMs, we allocate after the VM is running (legacy behaviour).
+		$ipam    = null;
+		$ipv4    = null;
+		$gateway = null;
+		$prefix  = '/24';
+		if ($use_cloud_init) {
+			$ipam    = $this->allocate_ip();
+			$ipv4    = $ipam['ip']      ?? null;
+			$gateway = $ipam['gateway'] ?? null;
+			$prefix  = $ipam['prefix']  ?? '/24';
+		}
+
+		// Fetch DNS servers from IPAM settings (used by cloud-init)
+		$ipam_settings = $this->di['db']->findOne('service_proxmox_ipam_settings', '1=1');
+		$dns1 = $ipam_settings->dns_server_1 ?? '1.1.1.1';
+		$dns2 = $ipam_settings->dns_server_2 ?? '8.8.8.8';
+
 		// Build VM/CT creation parameters
 		$clone              = '';
 		$container_settings = [];
 		$description        = 'Service #' . $model->id . ' – client #' . $client->id;
 
 		if (!empty($product_config['clone'])) {
-			// Clone an existing template VM
+			// Clone an existing template VM (cloud image template for cloud-init)
 			$clone              = '/' . $product_config['cloneid'] . '/clone';
 			$container_settings = [
 				'newid'       => $vmid,
@@ -623,7 +644,7 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 				'pool'        => 'fb_client_' . $client->id,
 			];
 		} elseif ($product_config['virt'] === 'qemu') {
-			// Create a fresh QEMU VM from ISO/CD-ROM
+			// Create a fresh QEMU VM
 			$container_settings = [
 				'vmid'        => $vmid,
 				'name'        => $vm_name,
@@ -634,12 +655,18 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 				'scsi0'       => $product_config['storage'] . ':' . ($product_config['disk'] ?? 10),
 				'ostype'      => $product_config['ostype'] ?? 'other',
 				'bios'        => $product_config['bios'] ?? 'seabios',
-				'ide2'        => ($product_config['cdrom'] ?? '') . ',media=cdrom',
 				'sockets'     => 1,
 				'cores'       => $product_config['cpu'],
 				'onboot'      => 1,
 				'pool'        => 'fb_client_' . $client->id,
 			];
+			if ($use_cloud_init) {
+				// cloud-init drive replaces the ISO cdrom slot
+				$container_settings['ide2'] = $product_config['storage'] . ':cloudinit';
+			} else {
+				// traditional ISO/CD-ROM install
+				$container_settings['ide2'] = ($product_config['cdrom'] ?? '') . ',media=cdrom';
+			}
 		} else {
 			// Create a fresh LXC container
 			$container_settings = [
@@ -656,7 +683,6 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 				'onboot'      => 1,
 				'pool'        => 'fb_client_' . $client->id,
 			];
-			// Inject SSH key into LXC at creation time if available
 			if ($ssh_key) {
 				$container_settings['ssh-public-keys'] = $ssh_key;
 			}
@@ -669,16 +695,32 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 			throw new \Box_Exception("VPS could not be created on the Proxmox node.");
 		}
 
-		// For QEMU VMs (fresh or cloned): inject SSH key via cloud-init config after creation.
-		// Proxmox requires sshkeys to be URL-encoded (RFC 3986).
-		if ($ssh_key && $product_config['virt'] === 'qemu') {
+		// Apply cloud-init configuration before first boot.
+		// This sets the IP, credentials, SSH key and DNS — all picked up during boot.
+		if ($use_cloud_init) {
+			$ci_config = [
+				'ciuser'     => 'root',
+				'cipassword' => $proxmoxuser_password,
+				'nameserver' => trim($dns1 . ' ' . $dns2),
+				'ipconfig0'  => $ipv4
+					? 'ip=' . $ipv4 . $prefix . ',gw=' . $gateway
+					: 'ip=dhcp',
+			];
+			if ($ssh_key) {
+				// Proxmox requires the key to be URL-encoded (RFC 3986, not application/x-www-form-urlencoded)
+				$ci_config['sshkeys'] = rawurlencode($ssh_key);
+			}
+			$proxmox->put("/nodes/" . $server->name . "/qemu/" . $vmid . "/config", $ci_config);
+		} elseif ($ssh_key && $product_config['virt'] === 'qemu') {
+			// Non-cloud-init QEMU: inject SSH key into the VM config so it's available
+			// if the image is already cloud-init capable but we're not managing it fully.
 			$proxmox->put(
 				"/nodes/" . $server->name . "/qemu/" . $vmid . "/config",
 				['sshkeys' => rawurlencode($ssh_key)]
 			);
 		}
 
-		// Wait for the creation task to settle before starting
+		// Wait for the creation/clone task to settle before starting
 		sleep(10);
 
 		// Start the VM/CT
@@ -702,10 +744,12 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 			}
 		}
 
-		// Allocate an IP from the IPAM pool if one is available
-		$ipam   = $this->allocate_ip();
-		$ipv4   = $ipam['ip'] ?? null;
-		$gateway = $ipam['gateway'] ?? null;
+		// For non-cloud-init VMs: allocate IP after VM is confirmed running
+		if (!$use_cloud_init) {
+			$ipam    = $this->allocate_ip();
+			$ipv4    = $ipam['ip']      ?? null;
+			$gateway = $ipam['gateway'] ?? null;
+		}
 
 		// Persist the new service record
 		$model->updated_at = date('Y-m-d H:i:s');

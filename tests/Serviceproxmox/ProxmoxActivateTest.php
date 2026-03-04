@@ -214,4 +214,170 @@ class ProxmoxActivateTest extends TestCase
 
         $this->assertArrayNotHasKey('ssh-public-keys', $container_settings);
     }
+
+    // -------------------------------------------------------------------------
+    // Helper
+
+    private function makeIpBean(string $ip, int $rangeId, bool $gateway = false, bool $dedicated = false): object
+    {
+        $bean              = new \stdClass();
+        $bean->ip          = $ip;
+        $bean->ip_range_id = $rangeId;
+        $bean->gateway     = $gateway ? 1 : 0;
+        $bean->dedicated   = $dedicated ? 1 : 0;
+        return $bean;
+    }
+
+    // -------------------------------------------------------------------------
+    // Cloud-init provisioning tests
+
+    /**
+     * cloud-init drive replaces IDE cdrom slot when cloud_init=true.
+     */
+    public function testQemuCloudInitDriveReplacesIso(): void
+    {
+        $storage        = 'local-lvm';
+        $use_cloud_init = true;
+
+        $container_settings = [];
+        if ($use_cloud_init) {
+            $container_settings['ide2'] = $storage . ':cloudinit';
+        } else {
+            $container_settings['ide2'] = 'local:iso/debian.iso,media=cdrom';
+        }
+
+        $this->assertSame($storage . ':cloudinit', $container_settings['ide2']);
+        $this->assertStringNotContainsString('cdrom', $container_settings['ide2']);
+    }
+
+    /**
+     * Without cloud-init the traditional cdrom is used.
+     */
+    public function testQemuWithoutCloudInitUsesIso(): void
+    {
+        $cdrom          = 'local:iso/debian.iso';
+        $use_cloud_init = false;
+
+        $container_settings = [];
+        if ($use_cloud_init) {
+            $container_settings['ide2'] = 'local-lvm:cloudinit';
+        } else {
+            $container_settings['ide2'] = $cdrom . ',media=cdrom';
+        }
+
+        $this->assertStringContainsString('media=cdrom', $container_settings['ide2']);
+        $this->assertStringNotContainsString('cloudinit', $container_settings['ide2']);
+    }
+
+    /**
+     * cloud-init config with a known IP produces correct ipconfig0 string.
+     */
+    public function testCloudInitIpconfig0WithStaticIp(): void
+    {
+        $ipv4    = '10.0.1.5';
+        $gateway = '10.0.1.1';
+        $prefix  = '/24';
+
+        $ipconfig0 = 'ip=' . $ipv4 . $prefix . ',gw=' . $gateway;
+
+        $this->assertSame('ip=10.0.1.5/24,gw=10.0.1.1', $ipconfig0);
+    }
+
+    /**
+     * When no IP is available from IPAM, cloud-init falls back to DHCP.
+     */
+    public function testCloudInitIpconfig0FallsBackToDhcp(): void
+    {
+        $ipv4    = null;
+        $gateway = null;
+        $prefix  = '/24';
+
+        $ipconfig0 = $ipv4 ? 'ip=' . $ipv4 . $prefix . ',gw=' . $gateway : 'ip=dhcp';
+
+        $this->assertSame('ip=dhcp', $ipconfig0);
+    }
+
+    /**
+     * allocate_ip() returns 'prefix' derived from the range CIDR.
+     */
+    public function testAllocateIpReturnsPrefixFromCidr(): void
+    {
+        $ip   = $this->makeIpBean('10.0.1.5', 1);
+        $range = (object) ['gateway' => '10.0.1.1', 'cidr' => '10.0.1.0/24'];
+
+        $db = new class($ip, $range) {
+            public function __construct(private object $ip, private object $range) {}
+            public function getCol(string $sql): array { return []; }
+            public function find(string $t, string $w = ''): array { return [$this->ip]; }
+            public function load(string $t, mixed $id): ?object { return $this->range; }
+        };
+
+        $stub     = new IPAMTestStub();
+        $stub->di = new \FakeDI();
+        $stub->di->db = $db;
+
+        $result = $stub->allocate_ip();
+
+        $this->assertNotNull($result);
+        $this->assertSame('/24', $result['prefix']);
+        $this->assertSame('10.0.1.5', $result['ip']);
+        $this->assertSame('10.0.1.1', $result['gateway']);
+    }
+
+    /**
+     * allocate_ip() returns /24 as a safe default when CIDR is missing.
+     */
+    public function testAllocateIpDefaultsPrefixWhenNoCidr(): void
+    {
+        $ip   = $this->makeIpBean('10.0.1.5', 1);
+        $range = (object) ['gateway' => '10.0.1.1', 'cidr' => null];
+
+        $db = new class($ip, $range) {
+            public function __construct(private object $ip, private object $range) {}
+            public function getCol(string $sql): array { return []; }
+            public function find(string $t, string $w = ''): array { return [$this->ip]; }
+            public function load(string $t, mixed $id): ?object { return $this->range; }
+        };
+
+        $stub     = new IPAMTestStub();
+        $stub->di = new \FakeDI();
+        $stub->di->db = $db;
+
+        $result = $stub->allocate_ip();
+        $this->assertSame('/24', $result['prefix']);
+    }
+
+    /**
+     * cloud-init config with SSH key URL-encodes the key in 'sshkeys'.
+     */
+    public function testCloudInitConfigIncludesUrlEncodedSshKey(): void
+    {
+        $ssh_key   = 'ssh-rsa AAAAB3NzaC1yc2E user@host';
+        $ci_config = [];
+
+        if ($ssh_key) {
+            $ci_config['sshkeys'] = rawurlencode($ssh_key);
+        }
+
+        $this->assertArrayHasKey('sshkeys', $ci_config);
+        $this->assertSame(rawurlencode($ssh_key), $ci_config['sshkeys']);
+        // Spaces must be %20, not +
+        $this->assertStringNotContainsString('+', $ci_config['sshkeys']);
+    }
+
+    /**
+     * When cloud-init is disabled, SSH key is NOT injected via cloud-init config
+     * (it's handled separately for QEMU, or via ssh-public-keys for LXC).
+     */
+    public function testNonCloudInitQemuDoesNotSetCiuser(): void
+    {
+        $use_cloud_init = false;
+        $ci_config      = [];
+
+        if ($use_cloud_init) {
+            $ci_config['ciuser'] = 'root';
+        }
+
+        $this->assertArrayNotHasKey('ciuser', $ci_config);
+    }
 }

@@ -56,9 +56,10 @@ trait ProxmoxIPAM
 	 *
 	 * Looks up all registered IPs in service_proxmox_ipadress, excludes
 	 * gateway entries and IPs already assigned to active services, and
-	 * returns the first available address together with its gateway.
+	 * returns the first available address together with its gateway and
+	 * CIDR prefix length (e.g. "/24") for use in cloud-init ipconfig0.
 	 *
-	 * @return array|null Array with keys 'ip' and 'gateway', or null if no IP is available.
+	 * @return array|null Array with keys 'ip', 'gateway', 'prefix', or null if no IP is available.
 	 */
 	public function allocate_ip(): ?array
 	{
@@ -75,13 +76,22 @@ trait ProxmoxIPAM
 				continue;
 			}
 			if (!in_array($candidate->ip, $assigned, true)) {
-				// Fetch gateway for this range
 				$range   = $this->di['db']->load('service_proxmox_ip_range', $candidate->ip_range_id);
 				$gateway = $range ? $range->gateway : null;
+
+				// Extract prefix length from CIDR notation (e.g. "192.168.1.0/24" → "/24")
+				$prefix = '/24'; // safe default
+				if ($range && !empty($range->cidr)) {
+					$parts = explode('/', $range->cidr);
+					if (isset($parts[1]) && is_numeric($parts[1])) {
+						$prefix = '/' . $parts[1];
+					}
+				}
 
 				return [
 					'ip'      => $candidate->ip,
 					'gateway' => $gateway,
+					'prefix'  => $prefix,
 				];
 			}
 		}
