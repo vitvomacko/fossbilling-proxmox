@@ -1,0 +1,39 @@
+<?php
+
+require_once __DIR__ . '/../src/vendor/autoload.php';
+
+// Stub for \Box_Exception (not available outside FOSSBilling)
+if (!class_exists('\Box_Exception')) {
+    class Box_Exception extends \RuntimeException {}
+}
+
+// Stub for BBTestCase (FOSSBilling framework test base class)
+if (!class_exists('BBTestCase')) {
+    class BBTestCase extends \PHPUnit\Framework\TestCase {}
+}
+
+/**
+ * Simple DI container stub that supports both array access ($di['key'])
+ * and property access ($di->key), mirroring Pimple's interface.
+ */
+class FakeDI implements ArrayAccess
+{
+    private array $data = [];
+
+    public function offsetExists(mixed $offset): bool  { return isset($this->data[$offset]); }
+    public function offsetGet(mixed $offset): mixed     { return $this->data[$offset] ?? null; }
+    public function offsetSet(mixed $offset, mixed $value): void { $this->data[$offset] = $value; }
+    public function offsetUnset(mixed $offset): void   { unset($this->data[$offset]); }
+
+    // Allow property-style set for convenience in tests: $di->db = $mock
+    public function __set(string $name, mixed $value): void  { $this->data[$name] = $value; }
+    public function __get(string $name): mixed               { return $this->data[$name] ?? null; }
+    public function __isset(string $name): bool              { return isset($this->data[$name]); }
+}
+
+// Load all module source traits/classes
+require_once __DIR__ . '/../src/ProxmoxIPAM.php';
+require_once __DIR__ . '/../src/ProxmoxServer.php';
+require_once __DIR__ . '/../src/ProxmoxAuthentication.php';
+require_once __DIR__ . '/../src/ProxmoxVM.php';
+require_once __DIR__ . '/../src/ProxmoxTemplates.php';

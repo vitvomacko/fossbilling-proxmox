@@ -66,7 +66,7 @@ class ProxmoxServerTest extends TestCase
         };
 
         $stub        = new ServerTestStub();
-        $stub->di    = new \stdClass();
+        $stub->di    = new \FakeDI();
         $stub->di->db         = $db;
         $stub->di->mod_config = $modConfig;
         return $stub;
@@ -156,7 +156,7 @@ class ProxmoxServerTest extends TestCase
         $modConfig = fn(string $mod): array => $config;
 
         $stub        = new ServerTestStub();
-        $stub->di    = new \stdClass();
+        $stub->di    = new \FakeDI();
         $stub->di->db         = $db;
         $stub->di->mod_config = $modConfig;
 

@@ -47,16 +47,8 @@ class ProxmoxIPAMTest extends TestCase
      */
     public function testAllocateIpReturnsNullWhenPoolIsEmpty(): void
     {
-        $db = $this->createMock(\stdClass::class);
-
-        $db->method('getCol')->willReturn([]);
-        $db->method('find')->willReturn([]);
-
-        $di       = new \stdClass();
-        $di->db   = $db;
-
         $stub     = new IPAMTestStub();
-        $stub->di = (object) ['db' => $this->buildDbMock([], [])];
+        $stub->di = $this->buildDi($this->buildDbMock([], []));
 
         $this->assertNull($stub->allocate_ip());
     }
@@ -68,17 +60,10 @@ class ProxmoxIPAMTest extends TestCase
     {
         $gateway = $this->makeIpBean('10.0.0.1', 1, true);
         $usable  = $this->makeIpBean('10.0.0.2', 1, false);
-
-        $range = $this->makeRangeBean('10.0.0.1');
+        $range   = $this->makeRangeBean('10.0.0.1');
 
         $stub     = new IPAMTestStub();
-        $stub->di = (object) [
-            'db' => $this->buildDbMock(
-                assigned: [],
-                candidates: [$gateway, $usable],
-                range: $range,
-            ),
-        ];
+        $stub->di = $this->buildDi($this->buildDbMock([], [$gateway, $usable], $range));
 
         $result = $stub->allocate_ip();
 
@@ -92,19 +77,12 @@ class ProxmoxIPAMTest extends TestCase
      */
     public function testAllocateIpSkipsAlreadyAssignedIPs(): void
     {
-        $ip1 = $this->makeIpBean('10.0.0.10', 1);
-        $ip2 = $this->makeIpBean('10.0.0.11', 1);
-
+        $ip1  = $this->makeIpBean('10.0.0.10', 1);
+        $ip2  = $this->makeIpBean('10.0.0.11', 1);
         $range = $this->makeRangeBean('10.0.0.1');
 
         $stub     = new IPAMTestStub();
-        $stub->di = (object) [
-            'db' => $this->buildDbMock(
-                assigned: ['10.0.0.10'],  // already in use
-                candidates: [$ip1, $ip2],
-                range: $range,
-            ),
-        ];
+        $stub->di = $this->buildDi($this->buildDbMock(['10.0.0.10'], [$ip1, $ip2], $range));
 
         $result = $stub->allocate_ip();
 
@@ -121,12 +99,7 @@ class ProxmoxIPAMTest extends TestCase
         $ip2 = $this->makeIpBean('10.0.0.11', 1);
 
         $stub     = new IPAMTestStub();
-        $stub->di = (object) [
-            'db' => $this->buildDbMock(
-                assigned: ['10.0.0.10', '10.0.0.11'],
-                candidates: [$ip1, $ip2],
-            ),
-        ];
+        $stub->di = $this->buildDi($this->buildDbMock(['10.0.0.10', '10.0.0.11'], [$ip1, $ip2]));
 
         $this->assertNull($stub->allocate_ip());
     }
@@ -141,13 +114,7 @@ class ProxmoxIPAMTest extends TestCase
         $range = $this->makeRangeBean('10.0.0.1');
 
         $stub     = new IPAMTestStub();
-        $stub->di = (object) [
-            'db' => $this->buildDbMock(
-                assigned: [],
-                candidates: [$ip1, $ip2],
-                range: $range,
-            ),
-        ];
+        $stub->di = $this->buildDi($this->buildDbMock([], [$ip1, $ip2], $range));
 
         $result = $stub->allocate_ip();
 
@@ -156,7 +123,14 @@ class ProxmoxIPAMTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // Helper: build a fake DB object that mimics RedBeanORM's interface
+    // Helpers
+
+    private function buildDi(object $db): \FakeDI
+    {
+        $di     = new \FakeDI();
+        $di->db = $db;
+        return $di;
+    }
 
     private function buildDbMock(array $assigned, array $candidates, ?object $range = null): object
     {

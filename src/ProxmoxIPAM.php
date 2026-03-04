@@ -69,6 +69,11 @@ trait ProxmoxIPAM
 		$candidates = $this->di['db']->find('service_proxmox_ipadress', 'gateway = 0 AND dedicated = 0');
 
 		foreach ($candidates as $candidate) {
+			// Double-check in PHP – the SQL WHERE should already exclude these,
+			// but be defensive in case the ORM or a future refactor misses it.
+			if ($candidate->gateway || $candidate->dedicated) {
+				continue;
+			}
 			if (!in_array($candidate->ip, $assigned, true)) {
 				// Fetch gateway for this range
 				$range   = $this->di['db']->load('service_proxmox_ip_range', $candidate->ip_range_id);
