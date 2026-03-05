@@ -1392,10 +1392,12 @@ class Admin extends \Api_Abstract
         // dispense new ip_network
         $ip_range = $this->di['db']->dispense('service_proxmox_ip_range');
         // Fill ip_network
-        $ip_range->cidr = $data['cidr'];
-        $ip_range->gateway = $data['gateway'];
+        $ip_range->cidr      = $data['cidr'];
+        $ip_range->gateway   = $data['gateway'];
         $ip_range->broadcast = $data['broadcast'];
-        $ip_range->type = $data['type'];
+        $ip_range->type      = $data['type'];
+        // Derive the network address from CIDR (e.g. "192.168.1.0/24" → "192.168.1.0")
+        $ip_range->network   = inet_ntop(inet_pton(explode('/', $data['cidr'])[0]));
         $ip_range->created_at = date('Y-m-d H:i:s');
         $ip_range->updated_at = date('Y-m-d H:i:s');
         $this->di['db']->store($ip_range);
