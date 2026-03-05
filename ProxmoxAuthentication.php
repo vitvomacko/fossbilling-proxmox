@@ -180,17 +180,22 @@ trait ProxmoxAuthentication
 			throw new \Box_Exception("Failed to create test user for fossbilling");
 		} else {
 			// Delete the test user
-			$deleteuser = $proxmox->delete("/access/users/" . $userid);
+			$proxmox->delete("/access/users/" . $userid);
 
-			// Check if the test user was successfully deleted
-			$deleteuser = $proxmox->get("/access/users/" . $userid);
-			if ($deleteuser) {
-				throw new \Box_Exception("Failed to delete test user for fossbilling. Check permissions.");
-			} else {
-				// Remove the root password from the server object
-				$server->root_password = null;
-				return $server;
+			// Check if the test user was successfully deleted.
+			// Proxmox returns HTTP 500 "no such user" for a deleted user, which the
+			// API client throws as an exception rather than returning null — catch that.
+			try {
+				$stillExists = $proxmox->get("/access/users/" . $userid);
+			} catch (\Exception $e) {
+				// Exception means the user no longer exists — deletion succeeded.
+				$stillExists = null;
 			}
+			if ($stillExists) {
+				throw new \Box_Exception("Failed to delete test user for fossbilling. Check permissions.");
+			}
+			$server->root_password = null;
+			return $server;
 		}
 	}
 
