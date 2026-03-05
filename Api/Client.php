@@ -41,6 +41,14 @@ class Client extends \Api_Abstract
 
         $data = $arguments[0];
 
+        if (empty($data['order_id'])) {
+            throw new \Box_Exception('Order ID is missing', null, 7103);
+        }
+
+        $order = $this->di['db']->findOne('client_order', "id=:id", array(':id' => $data['order_id']));
+        if (!$order || $order->client_id != $this->getIdentity()->id) {
+            throw new \Box_Exception('Order not found', null, 7104);
+        }
 
         $model = $this->getService()->getServiceproxmoxByOrderId($data['order_id']);
 
@@ -67,7 +75,7 @@ class Client extends \Api_Abstract
             "id=:id",
             array(':id' => $data['order_id'])
         );
-        if (!$order) {
+        if (!$order || $order->client_id != $this->getIdentity()->id) {
             throw new \Box_Exception('Order not found');
         }
 
@@ -80,7 +88,7 @@ class Client extends \Api_Abstract
             throw new \Box_Exception('Proxmox service not found');
         }
 
-        // Retrieve associated 
+        // Retrieve associated
         $server  = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $service['server_id']));
 
         // if a server has been found, output its details, otherwise return an empty array
@@ -109,7 +117,7 @@ class Client extends \Api_Abstract
             "id=:id",
             array(':id' => $data['order_id'])
         );
-        if (!$order) {
+        if (!$order || $order->client_id != $this->getIdentity()->id) {
             throw new \Box_Exception('Order not found');
         }
 
@@ -122,14 +130,17 @@ class Client extends \Api_Abstract
             throw new \Box_Exception('Proxmox service not found');
         }
 
-        // Retrieve associated 
+        // Retrieve associated server — return only non-sensitive fields
         $server  = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $service['server_id']));
-
-        // if a server has been found, output its details, otherwise return an empty array
         if (!$server) {
             return array();
         }
-        return $server;
+
+        return array(
+            'name'     => $server->name,
+            'hostname' => $server->hostname ?? $server->ipv4,
+            'port'     => $server->port,
+        );
     }
 
     // function to return proxmox_service information from order
@@ -145,7 +156,7 @@ class Client extends \Api_Abstract
             "id=:id",
             array(':id' => $data['order_id'])
         );
-        if (!$order) {
+        if (!$order || $order->client_id != $this->getIdentity()->id) {
             throw new \Box_Exception('Order not found');
         }
 
@@ -157,7 +168,17 @@ class Client extends \Api_Abstract
         if (!$service) {
             throw new \Box_Exception('Proxmox service not found');
         }
-        return $service;
+
+        // Return only client-safe fields — no server credentials, no internal IDs
+        return array(
+            'vm_id'        => $service->vm_id,
+            'hostname'     => $service->hostname,
+            'type'         => $service->type,
+            'node'         => $service->node,
+            'config'       => $service->config,
+            'status'       => $service->status,
+            'ipv4_address' => $service->ipv4_address,
+        );
     }
 
 
@@ -177,7 +198,7 @@ class Client extends \Api_Abstract
             "id=:id",
             array(':id' => $data['order_id'])
         );
-        if (!$order) {
+        if (!$order || $order->client_id != $this->getIdentity()->id) {
             throw new \Box_Exception('Order not found');
         }
 
