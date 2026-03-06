@@ -561,16 +561,18 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 			$this->create_client_user($server, $client);
 		}
 
-		// Connect to Proxmox API
+		// Connect to Proxmox API using the server admin token.
+		// VM/CT creation requires permissions on storage (/storage/STORAGEID) which the client
+		// token cannot have without granting broad storage access. The admin token creates the
+		// resource and assigns it to the client pool — attribution is handled via pool membership.
 		$serveraccess = $this->find_access($server);
-		// find client permissions for server
 		$clientuser = $this->di['db']->findOne('service_proxmox_users', 'server_id = ? and client_id = ?', array($server->id, $client->id));
 		$config = $this->di['mod_config']('Serviceproxmox');
-		$proxmox = new \PVE2APIClient\PVE2_API($serveraccess, $server->root_user, $server->realm, $server->root_password, port: $server->port, tokenid: $clientuser->admin_tokenname, tokensecret: $clientuser->admin_tokenvalue, debug: $config['pmx_debug_logging']);
+		$proxmox = new \PVE2APIClient\PVE2_API($serveraccess, $server->root_user, $server->realm, $server->root_password, port: $server->port, tokenid: $server->tokenname, tokensecret: $server->tokenvalue, debug: $config['pmx_debug_logging']);
 
 		// Create Proxmox VM
 		if (!$proxmox->login()) {
-			throw new \Box_Exception('Login to Proxmox Host failed with client credentials', null, 7457);
+			throw new \Box_Exception('Login to Proxmox Host failed with admin credentials', null, 7457);
 		}
 
 		// Generate VMID: server_id + client_id (3 digits) + order_id (3 digits)
@@ -580,12 +582,23 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 			$vmid = 100 + $vmid;
 		}
 
-		// Ensure VMID is not already in use on this node
-		$vmid_in_use = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid);
+		// Ensure VMID is not already in use on this node.
+		// Proxmox returns HTTP 500 "config does not exist" for a non-existent VM/CT,
+		// which the PVE2 API client throws as an exception — catch it and treat as "free".
+		try {
+			$vmid_in_use = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid);
+		} catch (\Exception $e) {
+			$vmid_in_use = null;
+		}
 		if ($vmid_in_use) {
 			// Append a suffix and retry once; if still colliding, raise an error
 			$vmid = $vmid + 1;
-			if ($proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid)) {
+			try {
+				$still_in_use = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid);
+			} catch (\Exception $e) {
+				$still_in_use = null;
+			}
+			if ($still_in_use) {
 				throw new \Box_Exception("Could not find a free VMID for this order. Please contact support.");
 			}
 		}
@@ -597,7 +610,7 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		$ssh_key = null;
 		$ssh_key_meta = $this->di['db']->findOne(
 			'extension_meta',
-			'ext = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
+			'extension = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
 			['mod_serviceproxmox', 'client', $client->id, 'ssh_key']
 		);
 		if ($ssh_key_meta && !empty(trim($ssh_key_meta->meta_value))) {
@@ -942,13 +955,13 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 	{
 		$meta = $this->di['db']->findOne(
 			'extension_meta',
-			'ext = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
+			'extension = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
 			['mod_serviceproxmox', 'client', $clientId, 'ssh_key']
 		);
 
 		if (!$meta) {
 			$meta            = $this->di['db']->dispense('extension_meta');
-			$meta->ext       = 'mod_serviceproxmox';
+			$meta->extension = 'mod_serviceproxmox';
 			$meta->rel_type  = 'client';
 			$meta->rel_id    = $clientId;
 			$meta->meta_key  = 'ssh_key';
@@ -970,7 +983,7 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 	{
 		$meta = $this->di['db']->findOne(
 			'extension_meta',
-			'ext = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
+			'extension = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
 			['mod_serviceproxmox', 'client', $clientId, 'ssh_key']
 		);
 
@@ -990,7 +1003,7 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 	{
 		$meta = $this->di['db']->findOne(
 			'extension_meta',
-			'ext = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
+			'extension = ? AND rel_type = ? AND rel_id = ? AND meta_key = ?',
 			['mod_serviceproxmox', 'client', $clientId, 'ssh_key']
 		);
 

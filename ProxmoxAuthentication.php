@@ -245,9 +245,14 @@ trait ProxmoxAuthentication
 		$this->di['db']->store($clientuser);
 
 		// Check if the client already has a pool and if not create it.
-		$pool = $proxmox->get("/pools/" . $client->id);
+		$poolid = 'fb_client_' . $client->id;
+		try {
+			$pool = $proxmox->get("/pools/" . $poolid);
+		} catch (\Exception $e) {
+			$pool = null;
+		}
 		if (!$pool) {
-			$pool = $proxmox->post("/pools", array('poolid' => 'fb_client_' . $client->id, 'comment' => 'fossbilling pool for client id: ' . $client->id));
+			$pool = $proxmox->post("/pools", array('poolid' => $poolid, 'comment' => 'fossbilling pool for client id: ' . $client->id));
 		}
 		// Add permissions for client
 

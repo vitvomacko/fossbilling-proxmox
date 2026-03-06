@@ -64,7 +64,7 @@ trait ProxmoxIPAM
 	public function allocate_ip(): ?array
 	{
 		// All IPs already assigned to active services
-		$assigned = $this->di['db']->getCol('SELECT ipv4 FROM service_proxmox WHERE ipv4 IS NOT NULL AND ipv4 != ""');
+		$assigned = array_column($this->di['db']->getAll('SELECT ipv4 FROM service_proxmox WHERE ipv4 IS NOT NULL AND ipv4 != ""'), 'ipv4');
 
 		// Candidate IPs: not a gateway, not already assigned
 		$candidates = $this->di['db']->find('service_proxmox_ipadress', 'gateway = 0 AND dedicated = 0');
