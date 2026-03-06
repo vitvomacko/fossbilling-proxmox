@@ -89,7 +89,7 @@ class Client extends \Api_Abstract
 
         return [
             'server'   => $server->hostname,
-            'username' => 'root',
+            'username' => $service->admin_user ?? 'root',
             'cli'      => $this->getService()->vm_cli($order, $service),
             'status'   => $vm_info['status'],
         ];
@@ -131,6 +131,7 @@ class Client extends \Api_Abstract
             'ipv4'     => $service->ipv4,
             'config'   => $service->config,
             'status'   => $service->status,
+            'username' => $service->admin_user ?? 'root',
         ];
     }
 

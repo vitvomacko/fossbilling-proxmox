@@ -65,11 +65,12 @@ class ServiceMethodStub
 
     public function vm_cli($order, $service): string
     {
+        $user = $service->admin_user ?? 'root';
         if (!empty($service->ipv4)) {
-            return 'ssh root@' . $service->ipv4;
+            return 'ssh ' . $user . '@' . $service->ipv4;
         }
         if (!empty($service->hostname)) {
-            return 'ssh root@' . $service->hostname;
+            return 'ssh ' . $user . '@' . $service->hostname;
         }
         return '';
     }

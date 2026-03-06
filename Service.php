@@ -613,6 +613,12 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		$proxmoxuser_password = $this->di['tools']->generatePassword(16, 4); // Generate root/console password
 		$vm_name              = 'vm-' . $vmid;
 
+		// Determine admin username: Windows VMs use Administrator, everything else uses root.
+		// Can be overridden per-product with admin_user in product config.
+		$ostype     = $product_config['ostype'] ?? 'other';
+		$is_windows = str_starts_with($ostype, 'win');
+		$admin_user = $product_config['admin_user'] ?? ($is_windows ? 'Administrator' : 'root');
+
 		// Retrieve SSH public key from client profile (stored via client area or admin)
 		$ssh_key = null;
 		$ssh_key_meta = $this->di['db']->findOne(
@@ -746,7 +752,7 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		// This sets the IP, credentials, SSH key and DNS — all picked up during boot.
 		if ($use_cloud_init) {
 			$ci_config = [
-				'ciuser'     => 'root',
+				'ciuser'     => $admin_user,
 				'cipassword' => $proxmoxuser_password,
 				'nameserver' => trim($dns1 . ' ' . $dns2),
 				'ipconfig0'  => $ipv4
@@ -796,16 +802,17 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		}
 
 		// Persist the new service record
-		$model->updated_at = date('Y-m-d H:i:s');
-		$model->vmid       = $vmid;
-		$model->password   = $proxmoxuser_password;
-		$model->ipv4       = $ipv4;
-		$model->hostname   = $vm_name;
+		$model->updated_at  = date('Y-m-d H:i:s');
+		$model->vmid        = $vmid;
+		$model->password    = $proxmoxuser_password;
+		$model->admin_user  = $admin_user;
+		$model->ipv4        = $ipv4;
+		$model->hostname    = $vm_name;
 		$this->di['db']->store($model);
 
 		return [
 			'ip'       => $ipv4 ?? 'To be assigned – check the client area',
-			'username' => 'root',
+			'username' => $admin_user,
 			'password' => $proxmoxuser_password,
 		];
 	}
@@ -853,11 +860,12 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 	 */
 	public function vm_cli($order, $service): string
 	{
+		$user = $service->admin_user ?? 'root';
 		if (!empty($service->ipv4)) {
-			return 'ssh root@' . $service->ipv4;
+			return 'ssh ' . $user . '@' . $service->ipv4;
 		}
 		if (!empty($service->hostname)) {
-			return 'ssh root@' . $service->hostname;
+			return 'ssh ' . $user . '@' . $service->hostname;
 		}
 		return '';
 	}
@@ -879,7 +887,7 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 			'vmid'       => $model->vmid,
 			'hostname'   => $model->hostname,
 			'ipv4'       => $model->ipv4,
-			'username'   => 'root',
+			'username'   => $model->admin_user ?? 'root',
 			'password'   => $model->password,
 			'server'     => $server,
 			'created_at' => $model->created_at,

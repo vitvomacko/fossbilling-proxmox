@@ -10,7 +10,7 @@
                 <tr><th>{{ 'Status' | trans }}</th><td><span class="badge badge-{{ vm.status == 'running' ? 'success' : 'secondary' }}">{{ vm.status }}</span></td></tr>
                 <tr><th>{{ 'IP Address' | trans }}</th><td>{{ proxmox_service.ipv4 ?? '—' }}</td></tr>
                 <tr><th>{{ 'Hostname' | trans }}</th><td>{{ proxmox_service.hostname ?? '—' }}</td></tr>
-                <tr><th>{{ 'Username' | trans }}</th><td>root</td></tr>
+                <tr><th>{{ 'Username' | trans }}</th><td>{{ proxmox_service.username ?? 'root' }}</td></tr>
                 <tr><th>{{ 'VMID' | trans }}</th><td>{{ proxmox_service.vmid ?? '—' }}</td></tr>
             </table>
         </div>
