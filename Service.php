@@ -651,6 +651,7 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 				'name'        => $vm_name,
 				'description' => $description,
 				'full'        => true,
+				'storage'     => $product_config['storage'],
 				'pool'        => 'fb_client_' . $client->id,
 			];
 		} elseif ($product_config['virt'] === 'qemu') {
@@ -667,6 +668,7 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 				'bios'        => $product_config['bios'] ?? 'seabios',
 				'sockets'     => 1,
 				'cores'       => $product_config['cpu'],
+				'net0'        => $product_config['network'] ?? 'virtio,bridge=vmbr0',
 				'onboot'      => 1,
 				'pool'        => 'fb_client_' . $client->id,
 			];
