@@ -307,7 +307,7 @@ class ProxmoxActivateTest extends TestCase
 
         $db = new class($ip, $range) {
             public function __construct(private object $ip, private object $range) {}
-            public function getCol(string $sql): array { return []; }
+            public function getAll(string $sql): array { return []; }
             public function find(string $t, string $w = ''): array { return [$this->ip]; }
             public function load(string $t, mixed $id): ?object { return $this->range; }
         };
@@ -334,7 +334,7 @@ class ProxmoxActivateTest extends TestCase
 
         $db = new class($ip, $range) {
             public function __construct(private object $ip, private object $range) {}
-            public function getCol(string $sql): array { return []; }
+            public function getAll(string $sql): array { return []; }
             public function find(string $t, string $w = ''): array { return [$this->ip]; }
             public function load(string $t, mixed $id): ?object { return $this->range; }
         };

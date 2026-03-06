@@ -141,9 +141,9 @@ class ProxmoxIPAMTest extends TestCase
                 private ?object $range,
             ) {}
 
-            public function getCol(string $sql): array
+            public function getAll(string $sql): array
             {
-                return $this->assigned;
+                return array_map(fn($ip) => ['ipv4' => $ip], $this->assigned);
             }
 
             public function find(string $table, string $where = ''): array

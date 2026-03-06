@@ -35,11 +35,11 @@ cd /var/www/fossbilling/modules
 git clone https://github.com/vitvomacko/fossbilling-proxmox.git Serviceproxmox
 
 # Install PHP dependencies
-cd Serviceproxmox/src
+cd Serviceproxmox
 composer install --no-dev
 
 # Fix ownership (adjust user to match your web server)
-chown -R www-data:www-data /var/www/fossbilling/modules/Serviceproxmox
+chown -R nginx:nginx /var/www/fossbilling/modules/Serviceproxmox
 ```
 
 Then in the FOSSBilling admin area:
@@ -104,9 +104,8 @@ The module will:
 
 ```bash
 # Run unit tests (PHP 8.1+, Composer)
-cd src && composer install
-cd ..
-php src/vendor/bin/phpunit
+composer install
+php vendor/bin/phpunit
 ```
 
 All 58 unit tests must pass before merging.
