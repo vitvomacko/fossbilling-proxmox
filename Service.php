@@ -583,22 +583,23 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		}
 
 		// Ensure VMID is not already in use on this node.
-		// Proxmox returns HTTP 500 "config does not exist" for a non-existent VM/CT,
-		// which the PVE2 API client throws as an exception — catch it and treat as "free".
-		try {
-			$vmid_in_use = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid);
-		} catch (\Exception $e) {
-			$vmid_in_use = null;
-		}
-		if ($vmid_in_use) {
-			// Append a suffix and retry once; if still colliding, raise an error
-			$vmid = $vmid + 1;
-			try {
-				$still_in_use = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid);
-			} catch (\Exception $e) {
-				$still_in_use = null;
+		// VMIDs must be unique across both QEMU and LXC. We check /config for each type:
+		// the base endpoint always returns subdirs; /config returns 500 only if the VM doesn't exist.
+		$is_vmid_taken = function (int $id) use ($proxmox, $server): bool {
+			foreach (['qemu', 'lxc'] as $vtype) {
+				try {
+					$proxmox->get("/nodes/" . $server->name . "/" . $vtype . "/" . $id . "/config");
+					return true; // config returned → VMID exists
+				} catch (\Exception $e) {
+					// exception = config not found for this type, continue checking
+				}
 			}
-			if ($still_in_use) {
+			return false;
+		};
+
+		if ($is_vmid_taken($vmid)) {
+			$vmid = $vmid + 1;
+			if ($is_vmid_taken($vmid)) {
 				throw new \Box_Exception("Could not find a free VMID for this order. Please contact support.");
 			}
 		}
@@ -707,6 +708,34 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 			throw new \Box_Exception("VPS could not be created on the Proxmox node.");
 		}
 
+		// For clone operations Proxmox returns a UPID (task ID) — wait for it to finish
+		// before touching the VM config, otherwise the VM is locked and PUT will fail.
+		if (!empty($product_config['clone']) && is_string($vmcreate) && str_starts_with($vmcreate, 'UPID:')) {
+			$upid      = urlencode($vmcreate);
+			$task_done = false;
+			$max_wait  = 120;
+			$waited    = 0;
+			while ($waited < $max_wait) {
+				sleep(3);
+				$waited += 3;
+				try {
+					$task_status = $proxmox->get("/nodes/" . $server->name . "/tasks/" . $upid . "/status");
+				} catch (\Exception $e) {
+					$task_status = null;
+				}
+				if (!empty($task_status) && $task_status['status'] === 'stopped') {
+					if ($task_status['exitstatus'] !== 'OK') {
+						throw new \Box_Exception("Clone task failed: " . ($task_status['exitstatus'] ?? 'unknown error'));
+					}
+					$task_done = true;
+					break;
+				}
+			}
+			if (!$task_done) {
+				throw new \Box_Exception("Clone task did not complete within {$max_wait} seconds.");
+			}
+		}
+
 		// Apply cloud-init configuration before first boot.
 		// This sets the IP, credentials, SSH key and DNS — all picked up during boot.
 		if ($use_cloud_init) {
@@ -731,9 +760,6 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 				['sshkeys' => rawurlencode($ssh_key)]
 			);
 		}
-
-		// Wait for the creation/clone task to settle before starting
-		sleep(10);
 
 		// Start the VM/CT
 		$proxmox->post("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $vmid . "/status/start", []);
