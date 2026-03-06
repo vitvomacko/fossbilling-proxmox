@@ -614,9 +614,10 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		$vm_name              = 'vm-' . $vmid;
 
 		// Determine admin username: Windows VMs use Administrator, everything else uses root.
+		// Proxmox Windows ostype values: win7, win8, win10, win11, wxp, w2k, w2k3, w2k8, wvista.
 		// Can be overridden per-product with admin_user in product config.
 		$ostype     = $product_config['ostype'] ?? 'other';
-		$is_windows = str_starts_with($ostype, 'win');
+		$is_windows = str_starts_with($ostype, 'win') || str_starts_with($ostype, 'w2k') || in_array($ostype, ['wxp', 'wvista']);
 		$admin_user = $product_config['admin_user'] ?? ($is_windows ? 'Administrator' : 'root');
 
 		// Retrieve SSH public key from client profile (stored via client area or admin)
