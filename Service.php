@@ -224,6 +224,12 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		$extensionService = $this->di['mod_service']('extension');
 		$extensionService->setConfig(['ext' => 'mod_serviceproxmox', 'cpu_overprovisioning' => '1', 'ram_overprovisioning' => '1', 'storage_overprovisioning' => '1', 'avoid_overprovision' => '0', 'no_overprovision' => '1', 'use_auth_tokens' => '1', 'pmx_debug_logging' =>'0']);
 
+		// Ensure the extension name is stored lowercase. FOSSBilling derives the name from
+		// the module directory which may have a capital S ('Serviceproxmox'). The getTypes()
+		// check uses str_starts_with($mod, 'service') which is case-sensitive, so the product
+		// type would not appear in the UI if the name is stored with a capital letter.
+		$pdo = $this->getPdo();
+		$pdo->exec("UPDATE extension SET name='serviceproxmox' WHERE name='Serviceproxmox'");
 
 		return true;
 	}
@@ -1038,5 +1044,135 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 		if ($meta) {
 			$this->di['db']->trash($meta);
 		}
+	}
+
+	/* ################################################################################################### */
+	/* #######################################  Lifecycle  ############################################### */
+	/* ################################################################################################### */
+
+	/**
+	 * Suspend a service — stops the VM/CT on Proxmox.
+	 * Called by FOSSBilling when an order is suspended (e.g. overdue invoice).
+	 */
+	public function suspend($order, $model): bool
+	{
+		if (empty($model->vmid)) {
+			return true; // nothing to do if VM was never created
+		}
+		$server  = $this->di['db']->load('service_proxmox_server', $model->server_id);
+		$proxmox = $this->getProxmoxInstance($server);
+		$virt    = $this->_getVirtType($model, $server);
+
+		try {
+			$proxmox->post("/nodes/{$server->name}/{$virt}/{$model->vmid}/status/stop", []);
+		} catch (\Exception $e) {
+			throw new \Box_Exception('Could not stop VM ' . $model->vmid . ': ' . $e->getMessage());
+		}
+
+		$model->updated_at = date('Y-m-d H:i:s');
+		$this->di['db']->store($model);
+		return true;
+	}
+
+	/**
+	 * Unsuspend a service — starts the VM/CT on Proxmox.
+	 * Called by FOSSBilling when a suspended order is reactivated.
+	 */
+	public function unsuspend($order, $model): bool
+	{
+		if (empty($model->vmid)) {
+			return true;
+		}
+		$server  = $this->di['db']->load('service_proxmox_server', $model->server_id);
+		$proxmox = $this->getProxmoxInstance($server);
+		$virt    = $this->_getVirtType($model, $server);
+
+		try {
+			$proxmox->post("/nodes/{$server->name}/{$virt}/{$model->vmid}/status/start", []);
+		} catch (\Exception $e) {
+			throw new \Box_Exception('Could not start VM ' . $model->vmid . ': ' . $e->getMessage());
+		}
+
+		$model->updated_at = date('Y-m-d H:i:s');
+		$this->di['db']->store($model);
+		return true;
+	}
+
+	/**
+	 * Cancel (destroy) a service — stops and deletes the VM/CT from Proxmox.
+	 * Called by FOSSBilling when an order is cancelled.
+	 */
+	public function cancel($order, $model): bool
+	{
+		return $this->_destroyVm($model);
+	}
+
+	/**
+	 * Delete a service record — destroys the VM/CT and removes the DB entry.
+	 * Called by FOSSBilling when a service is hard-deleted.
+	 */
+	public function delete($model): bool
+	{
+		$this->_destroyVm($model);
+		$this->di['db']->trash($model);
+		return true;
+	}
+
+	/**
+	 * Detect VM virtualisation type (qemu/lxc) for a given service model.
+	 * Falls back to checking both API endpoints if type not stored in model.
+	 */
+	private function _getVirtType($model, $server): string
+	{
+		// If the product config was stored on the model, use it
+		if (!empty($model->virt)) {
+			return $model->virt;
+		}
+
+		// Probe Proxmox to determine type
+		$proxmox = $this->getProxmoxInstance($server);
+		foreach (['qemu', 'lxc'] as $virt) {
+			try {
+				$proxmox->get("/nodes/{$server->name}/{$virt}/{$model->vmid}/config");
+				return $virt;
+			} catch (\Exception $e) {
+				// not this type, try the other
+			}
+		}
+		throw new \Box_Exception('Could not determine VM type for VMID ' . $model->vmid);
+	}
+
+	/**
+	 * Stop and destroy a VM/CT on Proxmox.
+	 * Shared implementation used by cancel() and delete().
+	 */
+	private function _destroyVm($model): bool
+	{
+		if (empty($model->vmid)) {
+			return true; // VM was never provisioned
+		}
+
+		$server  = $this->di['db']->load('service_proxmox_server', $model->server_id);
+		$proxmox = $this->getProxmoxInstance($server);
+		$virt    = $this->_getVirtType($model, $server);
+		$node    = $server->name;
+		$vmid    = $model->vmid;
+
+		// Stop first (ignore errors — VM may already be stopped)
+		try {
+			$proxmox->post("/nodes/{$node}/{$virt}/{$vmid}/status/stop", []);
+			sleep(3); // give Proxmox a moment to process the stop
+		} catch (\Exception $e) {
+			// already stopped or not found — continue to destroy
+		}
+
+		// Destroy VM (Proxmox 8 removes unreferenced disks by default)
+		try {
+			$proxmox->delete("/nodes/{$node}/{$virt}/{$vmid}");
+		} catch (\Exception $e) {
+			throw new \Box_Exception('Could not destroy VM ' . $vmid . ': ' . $e->getMessage());
+		}
+
+		return true;
 	}
 }
