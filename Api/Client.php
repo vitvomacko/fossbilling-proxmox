@@ -3,7 +3,7 @@
 /**
  * Proxmox module for FOSSBilling
  *
- * @author   FOSSBilling (https://www.fossbilling.org) & Anuril (https://github.com/anuril) 
+ * @author   FOSSBilling (https://www.fossbilling.org) & Anuril (https://github.com/anuril)
  * @license  GNU General Public License version 3 (GPLv3)
  *
  * This software may contain code previously used in the BoxBilling project.
@@ -11,27 +11,18 @@
  * Original Author: Scitch (https://github.com/scitch)
  *
  * This source file is subject to the GNU General Public License version 3 (GPLv3) that is bundled
- * with this source code in the file LICENSE. 
+ * with this source code in the file LICENSE.
  * This Module has been written originally by Scitch (https://github.com/scitch) and has been forked from the original BoxBilling Module.
  * It has been rewritten extensively.
  */
 
 namespace Box\Mod\Serviceproxmox\Api;
 
-/**
- * Custom product management
- * 
- * 
- */
 class Client extends \Api_Abstract
 {
     /**
-     * Universal method to call method from plugin
-     * Pass any other params and they will be passed to plugin
-     *
-     * @param int $order_id - ID of the order
-     *
-     * @throws Box_Exception
+     * Universal dispatcher for custom service methods.
+     * Verifies order ownership before delegating to Service->customCall().
      */
     public function __call($name, $arguments)
     {
@@ -45,7 +36,7 @@ class Client extends \Api_Abstract
             throw new \Box_Exception('Order ID is missing', null, 7103);
         }
 
-        $order = $this->di['db']->findOne('client_order', "id=:id", array(':id' => $data['order_id']));
+        $order = $this->di['db']->findOne('client_order', "id=:id", [':id' => $data['order_id']]);
         if (!$order || $order->client_id != $this->getIdentity()->id) {
             throw new \Box_Exception('Order not found', null, 7104);
         }
@@ -55,202 +46,176 @@ class Client extends \Api_Abstract
         return $this->getService()->customCall($model, $name, $data);
     }
 
-    /**
-     * Get server details
-     * 
-     * @param int $id - server id
-     * @return array
-     * 
-     * @throws \Box_Exception 
-     */
-    public function vm_get($data)
-    {
-        $required = array(
-            'order_id'    => 'Order ID is missing',
-        );
-        $this->di['validator']->checkRequiredParamsForArray($required, $data);
+    // -------------------------------------------------------------------------
+    // Shared ownership check helper
+    // -------------------------------------------------------------------------
 
-        $order = $this->di['db']->findOne(
-            'client_order',
-            "id=:id",
-            array(':id' => $data['order_id'])
-        );
+    private function loadOrderAndService(array $data): array
+    {
+        $this->di['validator']->checkRequiredParamsForArray(['order_id' => 'Order ID is missing'], $data);
+
+        $order = $this->di['db']->findOne('client_order', "id=:id", [':id' => $data['order_id']]);
         if (!$order || $order->client_id != $this->getIdentity()->id) {
             throw new \Box_Exception('Order not found');
         }
 
-        $service = $this->di['db']->findOne(
-            'service_proxmox',
-            "order_id=:id",
-            array(':id' => $data['order_id'])
-        );
+        $service = $this->di['db']->findOne('service_proxmox', "order_id=:id", [':id' => $data['order_id']]);
         if (!$service) {
             throw new \Box_Exception('Proxmox service not found');
         }
 
-        // Retrieve associated
-        $server  = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $service['server_id']));
-
-        // if a server has been found, output its details, otherwise return an empty array
-        if (!$server) {
-            return array();
-        }
-        $vm_info = $this->getService()->vm_info($order, $service);
-        $output = array(
-            'server'  => $server->hostname,
-            'username'  => 'root',
-            'cli'       => $this->getService()->vm_cli($order, $service),
-            'status'    => $vm_info['status'],
-        );
-        return $output;
+        return [$order, $service];
     }
 
-    public function server_get($data)
+    // -------------------------------------------------------------------------
+    // VM information
+    // -------------------------------------------------------------------------
+
+    /**
+     * Return current VM status and connection details.
+     *
+     * @return array ['server', 'username', 'cli', 'status']
+     */
+    public function vm_get($data): array
     {
-        $required = array(
-            'order_id'    => 'Order ID is missing',
-        );
-        $this->di['validator']->checkRequiredParamsForArray($required, $data);
+        [$order, $service] = $this->loadOrderAndService($data);
 
-        $order = $this->di['db']->findOne(
-            'client_order',
-            "id=:id",
-            array(':id' => $data['order_id'])
-        );
-        if (!$order || $order->client_id != $this->getIdentity()->id) {
-            throw new \Box_Exception('Order not found');
-        }
-
-        $service = $this->di['db']->findOne(
-            'service_proxmox',
-            "order_id=:id",
-            array(':id' => $data['order_id'])
-        );
-        if (!$service) {
-            throw new \Box_Exception('Proxmox service not found');
-        }
-
-        // Retrieve associated server — return only non-sensitive fields
-        $server  = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $service['server_id']));
+        $server = $this->di['db']->findOne('service_proxmox_server', 'id=:id', [':id' => $service->server_id]);
         if (!$server) {
-            return array();
+            return [];
         }
 
-        return array(
+        $vm_info = $this->getService()->vm_info($order, $service);
+
+        return [
+            'server'   => $server->hostname,
+            'username' => 'root',
+            'cli'      => $this->getService()->vm_cli($order, $service),
+            'status'   => $vm_info['status'],
+        ];
+    }
+
+    /**
+     * Return Proxmox server details (non-sensitive fields only).
+     *
+     * @return array ['name', 'hostname', 'port']
+     */
+    public function server_get($data): array
+    {
+        [$order, $service] = $this->loadOrderAndService($data);
+
+        $server = $this->di['db']->findOne('service_proxmox_server', 'id=:id', [':id' => $service->server_id]);
+        if (!$server) {
+            return [];
+        }
+
+        return [
             'name'     => $server->name,
             'hostname' => $server->hostname ?? $server->ipv4,
             'port'     => $server->port,
-        );
+        ];
     }
-
-    // function to return proxmox_service information from order
-    public function get_proxmox_service($data)
-    {
-        $required = array(
-            'order_id'    => 'Order ID is missing',
-        );
-        $this->di['validator']->checkRequiredParamsForArray($required, $data);
-
-        $order = $this->di['db']->findOne(
-            'client_order',
-            "id=:id",
-            array(':id' => $data['order_id'])
-        );
-        if (!$order || $order->client_id != $this->getIdentity()->id) {
-            throw new \Box_Exception('Order not found');
-        }
-
-        $service = $this->di['db']->findOne(
-            'service_proxmox',
-            "order_id=:id",
-            array(':id' => $data['order_id'])
-        );
-        if (!$service) {
-            throw new \Box_Exception('Proxmox service not found');
-        }
-
-        // Return only client-safe fields — no server credentials, no internal IDs
-        return array(
-            'vm_id'        => $service->vm_id,
-            'hostname'     => $service->hostname,
-            'type'         => $service->type,
-            'node'         => $service->node,
-            'config'       => $service->config,
-            'status'       => $service->status,
-            'ipv4_address' => $service->ipv4_address,
-        );
-    }
-
 
     /**
-     * Reboot vm
+     * Return the service_proxmox record fields visible to the client.
+     *
+     * @return array ['vmid', 'hostname', 'ipv4', 'config', 'status']
      */
-    public function vm_manage($data)
+    public function get_proxmox_service($data): array
     {
-        $required = array(
-            'order_id'    => 'Order ID is missing',
-            'method'      => 'Method is missing',
-        );
-        $this->di['validator']->checkRequiredParamsForArray($required, $data);
+        [$order, $service] = $this->loadOrderAndService($data);
 
-        $order = $this->di['db']->findOne(
-            'client_order',
-            "id=:id",
-            array(':id' => $data['order_id'])
-        );
-        if (!$order || $order->client_id != $this->getIdentity()->id) {
-            throw new \Box_Exception('Order not found');
-        }
+        return [
+            'vmid'     => $service->vmid,
+            'hostname' => $service->hostname,
+            'ipv4'     => $service->ipv4,
+            'config'   => $service->config,
+            'status'   => $service->status,
+        ];
+    }
 
-        $service = $this->di['db']->findOne(
-            'service_proxmox',
-            "order_id=:id",
-            array(':id' => $data['order_id'])
-        );
-        if (!$service) {
-            throw new \Box_Exception('Proxmox service not found');
-        }
+    // -------------------------------------------------------------------------
+    // VM controls
+    // -------------------------------------------------------------------------
 
-        // Retrieve associated server
-        $server  = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $service['server_id']));
+    /**
+     * Dispatch a power-management action (start / shutdown / reboot).
+     *
+     * @param array $data ['order_id', 'method' => 'start'|'shutdown'|'reboot']
+     */
+    public function vm_manage($data): bool
+    {
+        $this->di['validator']->checkRequiredParamsForArray(
+            ['order_id' => 'Order ID is missing', 'method' => 'Method is missing'],
+            $data
+        );
+
+        [$order, $service] = $this->loadOrderAndService($data);
 
         switch ($data['method']) {
-            case 'reboot':
-                $this->getService()->vm_reboot($order, $service);
-                break;
             case 'start':
                 $this->getService()->vm_start($order, $service);
                 break;
             case 'shutdown':
                 $this->getService()->vm_shutdown($order, $service);
                 break;
+            case 'reboot':
+                $this->getService()->vm_reboot($order, $service);
+                break;
             default:
-                return false;
+                throw new \Box_Exception('Unknown vm_manage method: ' . $data['method']);
         }
 
         return true;
     }
 
     /**
-     * Get VNC console from PVE Host
+     * Reinstall a VM — destroys the current instance and re-provisions from the same product.
+     * Issues a new password; SSH key and VMID are reused.
+     *
+     * @param array $data ['order_id']
+     * @return array New credentials (ip, username, password)
      */
-    public function novnc_appjs_get($data)
+    public function vm_reinstall($data): array
     {
-        $appjs = $this->getService()->get_novnc_appjs($data);
-        return $appjs;
+        [$order, $service] = $this->loadOrderAndService($data);
+
+        if ($order->status !== 'active') {
+            throw new \Box_Exception('Only active orders can be reinstalled.');
+        }
+
+        return $this->getService()->vm_reinstall($order, $service);
     }
 
     /**
-     * Save or update the client's SSH public key.
+     * Generate a Proxmox VNC console URL for the VM.
      *
-     * The key is stored in extension_meta and injected into new VMs at provisioning.
-     * Existing running VMs are NOT updated automatically.
+     * Returns a time-limited URL that opens the Proxmox noVNC interface in a new tab.
+     * The client's browser must be able to reach the Proxmox host directly.
+     *
+     * @param array $data ['order_id']
+     * @return array ['url' => 'https://...']
+     */
+    public function vm_console($data): array
+    {
+        [$order, $service] = $this->loadOrderAndService($data);
+
+        return $this->getService()->vm_console($order, $service);
+    }
+
+    // -------------------------------------------------------------------------
+    // SSH key management
+    // -------------------------------------------------------------------------
+
+    /**
+     * Save or replace the client's SSH public key.
+     *
+     * The key is validated and stored in extension_meta. It will be injected into
+     * new VMs at provisioning time; existing running VMs are not updated.
      *
      * @param array $data ['ssh_key' => 'ssh-rsa AAAA...']
-     * @return bool
-     * @throws \Box_Exception
      */
-    public function ssh_key_save($data)
+    public function ssh_key_save($data): bool
     {
         if (empty($data['ssh_key'])) {
             throw new \Box_Exception('SSH key is required');
@@ -258,7 +223,6 @@ class Client extends \Api_Abstract
 
         $key = trim($data['ssh_key']);
 
-        // Basic format validation: must start with a known key type
         $allowed_prefixes = ['ssh-rsa', 'ssh-ed25519', 'ssh-ecdsa', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384', 'ecdsa-sha2-nistp521', 'sk-ssh-ed25519', 'sk-ecdsa-sha2-nistp256'];
         $valid = false;
         foreach ($allowed_prefixes as $prefix) {
@@ -271,7 +235,6 @@ class Client extends \Api_Abstract
             throw new \Box_Exception('Invalid SSH public key format. Key must start with ssh-rsa, ssh-ed25519, or ecdsa-sha2-*');
         }
 
-        // Key must have at least two parts (type + base64 data)
         $parts = explode(' ', $key);
         if (count($parts) < 2 || strlen($parts[1]) < 20) {
             throw new \Box_Exception('SSH key appears to be incomplete');
@@ -284,23 +247,20 @@ class Client extends \Api_Abstract
     }
 
     /**
-     * Get the client's currently stored SSH public key.
+     * Return the client's stored SSH public key.
      *
-     * @return array ['ssh_key' => '...'] or ['ssh_key' => null]
+     * @return array ['ssh_key' => '...' | null]
      */
-    public function ssh_key_get($data)
+    public function ssh_key_get($data): array
     {
         $client_id = $this->di['loggedin_client']->id;
-        $key = $this->getService()->get_client_ssh_key($client_id);
-        return ['ssh_key' => $key];
+        return ['ssh_key' => $this->getService()->get_client_ssh_key($client_id)];
     }
 
     /**
      * Delete the client's stored SSH public key.
-     *
-     * @return bool
      */
-    public function ssh_key_delete($data)
+    public function ssh_key_delete($data): bool
     {
         $client_id = $this->di['loggedin_client']->id;
         $this->getService()->delete_client_ssh_key($client_id);

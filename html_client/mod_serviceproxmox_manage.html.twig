@@ -1,10 +1,3 @@
-{% block js %}
-   {#  {{ '/serviceproxmox/novnc/app.js' | script_tag }} #}
-    {{ '/serviceproxmox/novnc/app/styles/input.css' | stylesheet_tag }}
-    {{ '/serviceproxmox/novnc/app/styles/pve.css' | stylesheet_tag }}
-    {{ '/serviceproxmox/novnc/app/error-handler.js' | script_tag }}
-{% endblock %}
-
 {% if order.status == 'active' %}
     {% set vm = client.serviceproxmox_vm_get({"order_id": order.id}) %}
     {% set proxmox_service = client.serviceproxmox_get_proxmox_service({"order_id": order.id}) %}
@@ -37,23 +30,61 @@
            data-api-msg="{{ 'VM shutting down. Reload the page in a few moments.' | trans }}">
             {{ 'Shutdown' | trans }}
         </a>
-        <a class="btn btn-warning api-link"
+        <a class="btn btn-warning api-link me-1"
            href="{{ 'api/client/serviceproxmox/vm_manage'|link({'order_id': order.id, 'method': 'reboot', 'CSRFToken': CSRFToken}) }}"
            data-api-confirm="{{ 'Are you sure?' | trans }}"
            data-api-msg="{{ 'VM rebooting. Reload the page in a few moments.' | trans }}">
             {{ 'Reboot' | trans }}
         </a>
+        <a class="btn btn-outline-danger api-link"
+           href="{{ 'api/client/serviceproxmox/vm_reinstall'|link({'order_id': order.id, 'CSRFToken': CSRFToken}) }}"
+           data-api-confirm="{{ 'This will ERASE all data on your VM and reinstall from scratch. Are you absolutely sure?' | trans }}"
+           data-api-msg="{{ 'Reinstall started. This may take a few minutes.' | trans }}">
+            {{ 'Reinstall' | trans }}
+        </a>
     </div>
 
-    {# ── Console placeholder ───────────────────────────────────────────────── #}
+    {# ── Console ──────────────────────────────────────────────────────────── #}
     <div class="mb-4">
         <h4>{{ 'Console' | trans }}</h4>
         {% if vm.status == 'running' %}
-            <p class="text-muted">{{ 'VNC console coming soon.' | trans }}</p>
+            <button id="btn-console" class="btn btn-secondary" onclick="openConsole({{ order.id }}, '{{ CSRFToken }}')">
+                {{ 'Open Console' | trans }}
+            </button>
+            <p class="text-muted small mt-1">{{ 'Opens the Proxmox noVNC console in a new tab. Requires network access to the Proxmox host.' | trans }}</p>
         {% else %}
-            <p class="text-muted">{{ 'The VM must be running to open a console.' | trans }}</p>
+            <p class="text-muted">{{ 'Start the VM to open a console.' | trans }}</p>
         {% endif %}
     </div>
+
+    <script>
+    function openConsole(orderId, csrfToken) {
+        var btn = document.getElementById('btn-console');
+        btn.disabled = true;
+        btn.textContent = '{{ 'Loading…' | trans }}';
+
+        fetch('{{ 'api/client/serviceproxmox/vm_console' | link }}', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'order_id=' + orderId + '&CSRFToken=' + encodeURIComponent(csrfToken)
+        })
+        .then(r => r.json())
+        .then(function(data) {
+            if (data.result && data.result.url) {
+                window.open(data.result.url, '_blank', 'noopener');
+            } else {
+                alert('{{ 'Could not obtain console URL. Is the VM running?' | trans }}');
+            }
+        })
+        .catch(function() {
+            alert('{{ 'Console request failed.' | trans }}');
+        })
+        .finally(function() {
+            btn.disabled = false;
+            btn.textContent = '{{ 'Open Console' | trans }}';
+        });
+    }
+    </script>
 
 {% endif %}
 
@@ -72,7 +103,6 @@
                 <div class="flex-grow-1">
                     <strong>{{ 'Key on file:' | trans }}</strong><br>
                     <code class="small text-break">
-                        {# Show only the first 60 chars and the comment (last word) to avoid exposing the full key #}
                         {{ ssh_key_data.ssh_key | slice(0, 60) }}…
                         {% set parts = ssh_key_data.ssh_key | split(' ') %}
                         {% if parts | length >= 3 %} {{ parts | last }}{% endif %}

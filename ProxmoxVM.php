@@ -3,7 +3,7 @@
 /**
  * Proxmox module for FOSSBilling
  *
- * @author   FOSSBilling (https://www.fossbilling.org) & Anuril (https://github.com/anuril) 
+ * @author   FOSSBilling (https://www.fossbilling.org) & Anuril (https://github.com/anuril)
  * @license  GNU General Public License version 3 (GPLv3)
  *
  * This software may contain code previously used in the BoxBilling project.
@@ -11,7 +11,7 @@
  * Original Author: Scitch (https://github.com/scitch)
  *
  * This source file is subject to the GNU General Public License version 3 (GPLv3) that is bundled
- * with this source code in the file LICENSE. 
+ * with this source code in the file LICENSE.
  * This Module has been written originally by Scitch (https://github.com/scitch) and has been forked from the original BoxBilling Module.
  * It has been rewritten extensively.
  */
@@ -19,182 +19,69 @@
 namespace Box\Mod\Serviceproxmox;
 
 /**
- * Proxmox module for FOSSBilling
+ * VM management methods for the Proxmox module.
+ *
+ * Note: suspend(), unsuspend(), cancel(), and delete() are intentionally NOT defined here.
+ * They are implemented directly in Service.php, which takes precedence over trait methods.
  */
 trait ProxmoxVM
 {
-	/* ################################################################################################### */
-	/* #####################################  VM Management  ############################################ */
-	/* ################################################################################################### */
 	/**
-	 * Suspend Proxmox VM
-	 * @param $order
-	 * @return boolean
+	 * Restore a previously cancelled service by starting the VM.
+	 * FOSSBilling calls this when an order is un-cancelled.
 	 */
-	public function suspend($order, $model)
+	public function uncancel($order, $model): bool
 	{
-		// Shutdown VM
-		$this->vm_shutdown($order, $model);
-		// TODO: Check that the VM was shutdown, otherwise send an email to the admin
-
-		$model->updated_at = date('Y-m-d H:i:s');
-		$this->di['db']->store($model);
-
-		return true;
+		return $this->vm_start($order, $model);
 	}
 
 	/**
-	 * Unsuspend Proxmox VM
-	 * @param $order
-	 * @return boolean
+	 * Return current VM status.
+	 *
+	 * @return array ['status' => 'running'|'stopped'|...]
 	 */
-	public function unsuspend($order, $model)
+	public function vm_info($order, $service): array
 	{
-		// Power on VM?
-		$this->vm_start($order, $model);
-		$model->updated_at = date('Y-m-d H:i:s');
-		$this->di['db']->store($model);
-
-		return true;
-	}
-
-	/**
-	 * Cancel Proxmox VM
-	 * @param $order
-	 * @return boolean
-	 */
-	public function cancel($order, $model)
-	{
-		return $this->suspend($order, $model);
-	}
-
-	/**
-	 * Uncancel Proxmox VM
-	 * @param $order
-	 * @return boolean
-	 */
-	public function uncancel($order, $model)
-	{
-		return $this->unsuspend($order, $model);
-	}
-
-	/**
-	 * Delete Proxmox VM
-	 * @param $order
-	 * @return boolean
-	 */
-	public function delete($order, $model)
-	{
-		if (is_object($model)) {
-
-			$product = $this->di['db']->load('product', $order->product_id);
-			$product_config = json_decode($product->config, 1);
-			$server = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $model->server_id));
-
-			$proxmox = $this->getProxmoxInstance($server);
-			if (!$proxmox->login()) {
-				throw new \Box_Exception("Login to Proxmox Host failed");
-			}
-
-			$node     = $server->name;
-			$virt     = $product_config['virt'];
-			$vmid     = $model->vmid;
-			$base_url = "/nodes/$node/$virt/$vmid";
-
-			$status = $proxmox->get("$base_url/status/current");
-			if (empty($status)) {
-				throw new \Box_Exception("VMID $vmid cannot be found on node $node");
-			}
-
-			if ($status['status'] !== 'stopped') {
-				$proxmox->post("$base_url/status/shutdown", ['forceStop' => true]);
-
-				// Wait up to 120 s for the VM to stop
-				$max_retries = 12;
-				for ($i = 0; $i < $max_retries; $i++) {
-					sleep(10);
-					$status = $proxmox->get("$base_url/status/current");
-					if ($status['status'] === 'stopped') {
-						break;
-					}
-					if ($i === $max_retries - 1) {
-						throw new \Box_Exception("VM $vmid did not stop within 120 seconds. Cannot delete.");
-					}
-				}
-			}
-
-			if (!$proxmox->delete($base_url)) {
-				throw new \Box_Exception("VM $vmid could not be deleted from Proxmox.");
-			}
-			return true;
-		}
-		return false;
-	}
-
-	/*
-	*	VM status
-	*
-	*	TODO: Add more Information
-	*/
-	public function vm_info($order, $service)
-	{
-		$product = $this->di['db']->load('product', $order->product_id);
-		$product_config = json_decode($product->config, 1);
-		$client = $this->di['db']->load('client', $order->client_id);
-		$server = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $service->server_id));
-		$clientuser = $this->di['db']->findOne('service_proxmox_users', 'server_id = ? and client_id = ?', array($server->id, $client->id));
+		$product        = $this->di['db']->load('product', $order->product_id);
+		$product_config = json_decode($product->config, true);
+		$server         = $this->di['db']->findOne('service_proxmox_server', 'id=:id', [':id' => $service->server_id]);
 
 		$proxmox = $this->getProxmoxInstance($server);
-		if ($proxmox->getVersion()) {
-			$status = $proxmox->get("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/current");
-			// VM monitoring?
+		$status  = $proxmox->get("/nodes/{$server->name}/{$product_config['virt']}/{$service->vmid}/status/current");
 
-			$output = array(
-				'status'	=> $status['status']
-			);
-			return $output;
-		} else {
-			throw new \Box_Exception("Login to Proxmox Host failed.");
-		}
+		return ['status' => $status['status'] ?? 'unknown'];
 	}
 
-	/*
-		Cold Reboot VM
-	*/
-	public function vm_reboot($order, $service)
+	/**
+	 * Cold-reboot a VM: graceful shutdown (force after 120 s) then start.
+	 */
+	public function vm_reboot($order, $service): bool
 	{
-		$product = $this->di['db']->load('product', $order->product_id);
-		$product_config = json_decode($product->config, 1);
-		$client = $this->di['db']->load('client', $order->client_id);
+		$product        = $this->di['db']->load('product', $order->product_id);
+		$product_config = json_decode($product->config, true);
+		$server         = $this->di['db']->findOne('service_proxmox_server', 'id=:id', [':id' => $service->server_id]);
 
-		$server = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $service->server_id));
-		$clientuser = $this->di['db']->findOne('service_proxmox_users', 'server_id = ? and client_id = ?', array($server->id, $client->id));
+		$proxmox  = $this->getProxmoxInstance($server);
+		$base_url = "/nodes/{$server->name}/{$product_config['virt']}/{$service->vmid}";
 
-		$proxmox = $this->getProxmoxInstance($server);
-		if (!$proxmox->login()) {
-			throw new \Box_Exception("Login to Proxmox Host failed.");
-		}
+		$proxmox->post("{$base_url}/status/shutdown", ['forceStop' => true]);
 
-		$base_url = "/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid;
-
-		// Graceful shutdown with force, max 120 s
-		$proxmox->post("$base_url/status/shutdown", ['forceStop' => true]);
 		for ($i = 0; $i < 12; $i++) {
 			sleep(10);
-			$status = $proxmox->get("$base_url/status/current");
+			$status = $proxmox->get("{$base_url}/status/current");
 			if (!empty($status) && $status['status'] === 'stopped') {
 				break;
 			}
 			if ($i === 11) {
-				throw new \Box_Exception("VM did not stop within 120 seconds. Reboot aborted.");
+				throw new \Box_Exception('VM did not stop within 120 seconds. Reboot aborted.');
 			}
 		}
 
-		// Start
-		$proxmox->post("$base_url/status/start", []);
+		$proxmox->post("{$base_url}/status/start", []);
+
 		for ($i = 0; $i < 12; $i++) {
 			sleep(10);
-			$status = $proxmox->get("$base_url/status/current");
+			$status = $proxmox->get("{$base_url}/status/current");
 			if (!empty($status) && $status['status'] === 'running') {
 				return true;
 			}
@@ -202,47 +89,31 @@ trait ProxmoxVM
 		throw new \Box_Exception("VM did not reach 'running' state within 120 seconds after reboot.");
 	}
 
-	/*
-		Start VM
-	*/
-	public function vm_start($order, $service)
+	/**
+	 * Start a VM.
+	 */
+	public function vm_start($order, $service): bool
 	{
-		$product = $this->di['db']->load('product', $order->product_id);
-		$product_config = json_decode($product->config, 1);
-		$client = $this->di['db']->load('client', $order->client_id);
-		$server = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $service->server_id));
-		$clientuser = $this->di['db']->findOne('service_proxmox_users', 'server_id = ? and client_id = ?', array($server->id, $client->id));
+		$product        = $this->di['db']->load('product', $order->product_id);
+		$product_config = json_decode($product->config, true);
+		$server         = $this->di['db']->findOne('service_proxmox_server', 'id=:id', [':id' => $service->server_id]);
 
 		$proxmox = $this->getProxmoxInstance($server);
-		if ($proxmox->login()) {
-			$proxmox->post("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/start", array());
-			return true;
-		} else {
-			throw new \Box_Exception("Login to Proxmox Host failed.");
-		}
+		$proxmox->post("/nodes/{$server->name}/{$product_config['virt']}/{$service->vmid}/status/start", []);
+		return true;
 	}
 
-	/*
-		Shutdown VM
-	*/
-	public function vm_shutdown($order, $service)
+	/**
+	 * Gracefully shut down a VM (with force-stop fallback).
+	 */
+	public function vm_shutdown($order, $service): bool
 	{
-		$product = $this->di['db']->load('product', $order->product_id);
-		$product_config = json_decode($product->config, 1);
-		$client = $this->di['db']->load('client', $order->client_id);
-		$server = $this->di['db']->findOne('service_proxmox_server', 'id=:id', array(':id' => $service->server_id));
+		$product        = $this->di['db']->load('product', $order->product_id);
+		$product_config = json_decode($product->config, true);
+		$server         = $this->di['db']->findOne('service_proxmox_server', 'id=:id', [':id' => $service->server_id]);
 
-		$clientuser = $this->di['db']->findOne('service_proxmox_users', 'server_id = ? and client_id = ?', array($server->id, $client->id));
 		$proxmox = $this->getProxmoxInstance($server);
-		if ($proxmox->login()) {
-			$settings = array(
-				'forceStop' 	=> true
-			);
-
-			$proxmox->post("/nodes/" . $server->name . "/" . $product_config['virt'] . "/" . $service->vmid . "/status/shutdown", $settings);
-			return true;
-		} else {
-			throw new \Box_Exception("Login to Proxmox Host failed.");
-		}
+		$proxmox->post("/nodes/{$server->name}/{$product_config['virt']}/{$service->vmid}/status/shutdown", ['forceStop' => true]);
+		return true;
 	}
 }

@@ -1175,4 +1175,80 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 
 		return true;
 	}
+
+	/**
+	 * Reinstall a VM/CT — destroy the existing instance and re-provision it from scratch
+	 * using the same product config (same VMID, new password, same SSH key).
+	 *
+	 * @param  object $order  client_order record
+	 * @param  object $model  service_proxmox record
+	 * @return array  New credentials (same shape as activate() return value)
+	 */
+	public function vm_reinstall($order, $model): array
+	{
+		if (empty($model->vmid)) {
+			throw new \Box_Exception('VM is not provisioned yet and cannot be reinstalled.');
+		}
+
+		// Step 1: destroy the current VM
+		$this->_destroyVm($model);
+		sleep(3); // let Proxmox fully remove the VM before re-creating
+
+		// Step 2: clear provisioning fields so activate() treats this as fresh
+		$model->vmid     = null;
+		$model->ipv4     = null;
+		$model->password = null;
+		$this->di['db']->store($model);
+
+		// Step 3: re-provision — activate() is idempotent regarding Proxmox user/pool
+		// (it checks for existing clientuser before creating) and generates the same
+		// deterministic VMID (server_id + client_id + order_id), which is now free.
+		return $this->activate($order, $model);
+	}
+
+	/**
+	 * Generate a Proxmox VNC console URL for the VM.
+	 *
+	 * Returns a URL that the client's browser can open to get an interactive console.
+	 * The URL points directly to the Proxmox web UI noVNC interface and requires
+	 * the client to be able to reach the Proxmox host (direct network or VPN).
+	 *
+	 * @param  object $order   client_order record (unused but kept for API consistency)
+	 * @param  object $model   service_proxmox record
+	 * @return array  ['url' => 'https://...']
+	 */
+	public function vm_console($order, $model): array
+	{
+		if (empty($model->vmid)) {
+			throw new \Box_Exception('VM is not provisioned yet.');
+		}
+
+		$server  = $this->di['db']->load('service_proxmox_server', $model->server_id);
+		$proxmox = $this->getProxmoxInstance($server);
+		$virt    = $this->_getVirtType($model, $server);
+		$node    = $server->name;
+		$vmid    = $model->vmid;
+		$host    = $server->hostname ?: $server->ipv4;
+		$port    = $server->port ?: 8006;
+
+		// Request a VNC proxy ticket from Proxmox
+		$result = $proxmox->post("/nodes/{$node}/{$virt}/{$vmid}/vncproxy", ['websocket' => 1]);
+
+		if (empty($result['ticket'])) {
+			throw new \Box_Exception('Could not obtain VNC ticket from Proxmox.');
+		}
+
+		$ticket   = $result['ticket'];
+		$vnc_port = $result['port'];
+		$console_type = ($virt === 'lxc') ? 'lxc' : 'kvm';
+
+		// Build the Proxmox noVNC console URL
+		$ws_path = rawurlencode("api2/json/nodes/{$node}/{$virt}/{$vmid}/vncwebsocket/port/{$vnc_port}/vncticket/" . rawurlencode($ticket));
+		$url = "https://{$host}:{$port}/?console={$console_type}&novnc=1"
+			 . "&vmid={$vmid}&node={$node}&resize=off"
+			 . "&ticket=" . rawurlencode($ticket)
+			 . "&path={$ws_path}";
+
+		return ['url' => $url];
+	}
 }

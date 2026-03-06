@@ -1,17 +1,13 @@
 <?php
 
 /**
- * Unit tests for ProxmoxVM lifecycle helpers and Service utility methods.
+ * Unit tests for ProxmoxVM trait and Service utility methods.
  *
- * vm_start / vm_shutdown / vm_reboot / delete (when model IS an object) all call
- * getProxmoxInstance() and therefore require a live Proxmox node — they are
- * integration-level.  We test everything that CAN be tested without a real node:
- *
- *   - suspend() / unsuspend() / cancel() / uncancel() delegation logic
- *   - delete() returns false when $model is not an object
- *   - getServiceproxmoxByOrderId() — found / not-found
- *   - vm_cli() — ipv4 / hostname / empty fallbacks
- *   - customCall() — unknown method throws; known method dispatches
+ * Note: suspend(), unsuspend(), cancel(), delete() were removed from the
+ * ProxmoxVM trait and are now implemented directly in Service.php.
+ * This file tests only what remains in the trait (uncancel, vm_start,
+ * vm_shutdown, vm_reboot delegations via mocks) and the standalone
+ * Service utility methods (getServiceproxmoxByOrderId, vm_cli, customCall).
  *
  * @license GNU General Public License version 3 (GPLv3)
  */
@@ -21,7 +17,8 @@ namespace Box\Mod\Serviceproxmox;
 use PHPUnit\Framework\TestCase;
 
 // ---------------------------------------------------------------------------
-// Stub for ProxmoxVM methods that don't need a real Proxmox connection.
+// Stub that uses the ProxmoxVM trait with vm_start/vm_shutdown overridden
+// so tests never need a real Proxmox connection.
 
 class VMTestStub
 {
@@ -29,7 +26,7 @@ class VMTestStub
 
     public $di;
 
-    /** Track which high-level methods were invoked */
+    /** Track which low-level methods were invoked */
     public array $calls = [];
 
     public function getProxmoxInstance($server): never
@@ -37,23 +34,21 @@ class VMTestStub
         throw new \LogicException('Should not connect to Proxmox in unit tests');
     }
 
-    // Override so suspend/unsuspend don't need a real Proxmox connection
-    public function vm_shutdown($order, $model): bool
-    {
-        $this->calls[] = 'vm_shutdown';
-        return true;
-    }
-
     public function vm_start($order, $model): bool
     {
         $this->calls[] = 'vm_start';
         return true;
     }
+
+    public function vm_shutdown($order, $model): bool
+    {
+        $this->calls[] = 'vm_shutdown';
+        return true;
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Minimal stub that replicates only the three utility methods we added to Service,
-// without pulling in Service.php (which requires FOSSBilling interfaces).
+// Minimal stub for the utility methods that live in Service.php.
 
 class ServiceMethodStub
 {
@@ -103,107 +98,25 @@ class ProxmoxVMTest extends TestCase
 
     private function makeModel(): object
     {
-        $m             = new \stdClass();
-        $m->id         = 1;
-        $m->vmid       = 1001;
-        $m->server_id  = 1;
-        $m->updated_at = null;
+        $m            = new \stdClass();
+        $m->id        = 1;
+        $m->vmid      = 1001;
+        $m->server_id = 1;
         return $m;
     }
 
-    private function makeStoringDb(): object
-    {
-        return new class {
-            public bool $stored = false;
-            public function store(object $bean): void { $this->stored = true; }
-        };
-    }
-
     // -----------------------------------------------------------------------
-    // suspend() / unsuspend() delegate to vm_shutdown / vm_start
+    // uncancel() delegates to vm_start()
 
-    public function testSuspendCallsVmShutdown(): void
+    public function testUncancelCallsVmStart(): void
     {
         $stub     = new VMTestStub();
         $stub->di = new \FakeDI();
-        $stub->di->db = $this->makeStoringDb();
-
-        $stub->suspend($this->makeOrder(), $this->makeModel());
-
-        $this->assertContains('vm_shutdown', $stub->calls);
-    }
-
-    public function testUnsuspendCallsVmStart(): void
-    {
-        $stub     = new VMTestStub();
-        $stub->di = new \FakeDI();
-        $stub->di->db = $this->makeStoringDb();
-
-        $stub->unsuspend($this->makeOrder(), $this->makeModel());
-
-        $this->assertContains('vm_start', $stub->calls);
-    }
-
-    public function testCancelDelegatesToSuspend(): void
-    {
-        $stub     = new VMTestStub();
-        $stub->di = new \FakeDI();
-        $stub->di->db = $this->makeStoringDb();
-
-        $result = $stub->cancel($this->makeOrder(), $this->makeModel());
-
-        $this->assertTrue($result);
-        $this->assertContains('vm_shutdown', $stub->calls);
-    }
-
-    public function testUncancelDelegatesToUnsuspend(): void
-    {
-        $stub     = new VMTestStub();
-        $stub->di = new \FakeDI();
-        $stub->di->db = $this->makeStoringDb();
 
         $result = $stub->uncancel($this->makeOrder(), $this->makeModel());
 
         $this->assertTrue($result);
         $this->assertContains('vm_start', $stub->calls);
-    }
-
-    public function testSuspendStoresUpdatedAt(): void
-    {
-        $db       = $this->makeStoringDb();
-        $stub     = new VMTestStub();
-        $stub->di = new \FakeDI();
-        $stub->di->db = $db;
-
-        $stub->suspend($this->makeOrder(), $this->makeModel());
-
-        $this->assertTrue($db->stored);
-    }
-
-    public function testUnsuspendStoresUpdatedAt(): void
-    {
-        $db       = $this->makeStoringDb();
-        $stub     = new VMTestStub();
-        $stub->di = new \FakeDI();
-        $stub->di->db = $db;
-
-        $stub->unsuspend($this->makeOrder(), $this->makeModel());
-
-        $this->assertTrue($db->stored);
-    }
-
-    // delete() guard: returns false when $model is not an object
-
-    public function testDeleteReturnsFalseWhenModelIsNull(): void
-    {
-        $stub = new VMTestStub();
-        $this->assertFalse($stub->delete($this->makeOrder(), null));
-    }
-
-    public function testDeleteReturnsFalseWhenModelIsArray(): void
-    {
-        $stub = new VMTestStub();
-        $this->assertFalse($stub->delete($this->makeOrder(), []));
     }
 
     // -----------------------------------------------------------------------
@@ -289,17 +202,14 @@ class ProxmoxVMTest extends TestCase
 
     public function testCustomCallDispatchesToExistingMethod(): void
     {
-        // vm_cli exists on ServiceMethodStub — use it as a dispatch target
         $svc = new ServiceMethodStub();
 
         $service           = new \stdClass();
         $service->ipv4     = '1.2.3.4';
         $service->hostname = '';
 
-        // customCall($model, 'vm_cli', $data) calls $svc->vm_cli($model, [$service])
-        // vm_cli's first arg ($order) = $model, second arg ($service) = [$service] (array, not stdClass)
-        // so ipv4 won't match, but the method dispatches without throwing — that's the contract
-        $result = $svc->customCall(new \stdClass(), 'vm_cli', [$service]);
+        // customCall($model, 'vm_cli', $data) calls $svc->vm_cli($model, $data)
+        $result = $svc->customCall(new \stdClass(), 'vm_cli', []);
         $this->assertIsString($result);
     }
 }
