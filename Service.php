@@ -1190,9 +1190,13 @@ class Service implements \FOSSBilling\InjectionAwareInterface
 			throw new \Box_Exception('VM is not provisioned yet and cannot be reinstalled.');
 		}
 
-		// Step 1: destroy the current VM
-		$this->_destroyVm($model);
-		sleep(3); // let Proxmox fully remove the VM before re-creating
+		// Step 1: destroy the current VM (ignore errors — VM may already be gone on Proxmox)
+		try {
+			$this->_destroyVm($model);
+			sleep(3); // let Proxmox fully remove the VM before re-creating
+		} catch (\Box_Exception $e) {
+			error_log('vm_reinstall: could not destroy VMID ' . $model->vmid . ' (may not exist): ' . $e->getMessage());
+		}
 
 		// Step 2: clear provisioning fields so activate() treats this as fresh
 		$model->vmid     = null;
