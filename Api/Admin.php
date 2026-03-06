@@ -233,9 +233,9 @@ class Admin extends \Api_Abstract
      */
     public function servers_in_group($data)
     {
-        $sql = "SELECT * FROM `service_proxmox_server` WHERE `group` = '" . $data['group'] . "' AND `active` = 1";
+        $sql = "SELECT * FROM `service_proxmox_server` WHERE `group` = :group AND `active` = 1";
 
-        $servers = $this->di['db']->getAll($sql);
+        $servers = $this->di['db']->getAll($sql, [':group' => $data['group']]);
 
         // remove password & api keys from results
         foreach ($servers as $key => $server) {
@@ -252,8 +252,8 @@ class Admin extends \Api_Abstract
      */
     public function qemu_templates_on_server($data)
     {
-        $sql = "SELECT * FROM `service_proxmox_qemu_template` WHERE `server_id` = '" . $data['server_id'] . "'";
-        $templates = $this->di['db']->getAll($sql);
+        $sql = "SELECT * FROM `service_proxmox_qemu_template` WHERE `server_id` = :server_id";
+        $templates = $this->di['db']->getAll($sql, [':server_id' => (int) $data['server_id']]);
         return $templates;
     }
 
@@ -437,8 +437,8 @@ class Admin extends \Api_Abstract
             'tokenname'         => $server->tokenname,
             'tokenvalue'        => str_repeat("*", 26),
             'root_user'         => $server->root_user,
-            'root_password'     => $server->root_password,
-            'admin_password'    => $server->admin_password,
+            'root_password'     => empty($server->root_password) ? '' : str_repeat("*", 26),
+            'admin_password'    => empty($server->admin_password) ? '' : str_repeat("*", 26),
             'active'            => $server->active,
         );
         return $output;
@@ -579,8 +579,8 @@ class Admin extends \Api_Abstract
         $serverstorage = $service->getStorageData($server);
 
         foreach ($serverstorage as $key => $value) {
-            $sql = "SELECT * FROM `service_proxmox_storage` WHERE server_id = " . $server_id . " AND storage = '" . $value['storage'] . "'";
-            $storage = $this->di['db']->getAll($sql);
+            $sql = "SELECT * FROM `service_proxmox_storage` WHERE server_id = :server_id AND storage = :storage";
+            $storage = $this->di['db']->getAll($sql, [':server_id' => (int) $server_id, ':storage' => $value['storage']]);
 
             // if the storage exists, update it, otherwise create it
             if (!empty($storage)) {
@@ -616,8 +616,8 @@ class Admin extends \Api_Abstract
             // check if $value['template'] exists, and if it's content is 1
             if (!empty($value['template'])) {
                 if ($value['template'] == 1) {
-                    $sql = "SELECT * FROM `service_proxmox_qemu_template` WHERE server_id = " . $server_id . " AND vmid = " . $value['vmid'];
-                    $template = $this->di['db']->getAll($sql);
+                    $sql = "SELECT * FROM `service_proxmox_qemu_template` WHERE server_id = :server_id AND vmid = :vmid";
+                    $template = $this->di['db']->getAll($sql, [':server_id' => (int) $server_id, ':vmid' => (int) $value['vmid']]);
 
                     // if the template exists, update it, otherwise create it
                     if (!empty($template)) {
